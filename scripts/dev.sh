@@ -33,6 +33,8 @@ fi
 : "${DSH_WEB_PORT:=3080}"
 : "${DSH_WEB_URL:=http://127.0.0.1:${DSH_WEB_PORT}}"
 : "${DSH_ARTIFACT_HUB_CREATED_BY:=dsh-local-user}"
+: "${DSH_ARTIFACT_HUB_MODE:=local}"
+: "${DSH_ARTIFACT_HUB_ARTIFACT_ROOT:=${HUB_ARTIFACT_ROOT}}"
 
 : "${STARTUP_TIMEOUT_SECONDS:=60}"
 : "${DSH_ARTIFACT_HUB_TMP_DIR:=${TMPDIR:-/tmp}}"
@@ -251,6 +253,8 @@ start_all() {
     exec env \
       DSH_ARTIFACT_HUB_URL="${HUB_URL}" \
       DSH_ARTIFACT_HUB_CREATED_BY="${DSH_ARTIFACT_HUB_CREATED_BY}" \
+      DSH_ARTIFACT_HUB_MODE="${DSH_ARTIFACT_HUB_MODE}" \
+      DSH_ARTIFACT_HUB_ARTIFACT_ROOT="${DSH_ARTIFACT_HUB_ARTIFACT_ROOT}" \
       dsh --profile "${DSH_PROFILE}" --host "${DSH_WEB_HOST}" --port "${DSH_WEB_PORT}" --no-open
   ) >"${DSH_ARTIFACT_HUB_RUN_DIR}/dsh-web.log" 2>&1 &
   DSH_WEB_PID=$!
