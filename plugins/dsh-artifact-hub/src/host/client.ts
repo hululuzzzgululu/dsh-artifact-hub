@@ -18,6 +18,19 @@ export interface TrustedLocalShareRequest extends LocalShareRequest {
   readonly dshWorkspaceTitle?: string
 }
 
+/** Hub reservation consumed by the DSH Host before it copies a NAS snapshot. */
+export interface PreparedNasUpload {
+  readonly uploadId: string
+  readonly storageKey: string
+}
+
+/** Fields produced by the DSH Host after copying a prepared NAS snapshot. */
+export interface NasCommit {
+  readonly uploadId: string
+  readonly checksum: string
+  readonly expiresAt?: string
+}
+
 /** Injectable Fetch subset used by the Artifact Hub HTTP adapter. */
 export type Fetch = (input: string | URL, init?: RequestInit) => Promise<Response>
 
@@ -35,6 +48,11 @@ interface HubShareResult {
   readonly name: string
   readonly url: string
   readonly expires_at: string | null
+}
+
+interface HubPreparedNasUpload {
+  readonly upload_id: string
+  readonly storage_key: string
 }
 
 interface HubCreatedShare {
@@ -88,9 +106,11 @@ export function inferArtifactType(sourcePath: string): string {
   return ARTIFACT_TYPES[name.slice(dot + 1).toLowerCase()] ?? 'other'
 }
 
-/** Minimal Local-mode client for Artifact Hub's single-stage share endpoint. */
+/** HTTP client for Artifact Hub's Local and two-phase NAS share endpoints. */
 export class ArtifactHubClient {
   private readonly sharesUrl: URL
+  private readonly nasPrepareUrl: URL
+  private readonly nasCommitUrl: URL
 
   /**
    * @param serviceUrl Artifact Hub public or service base URL.
@@ -103,6 +123,8 @@ export class ArtifactHubClient {
     private readonly fetcher: Fetch = fetch,
   ) {
     this.sharesUrl = new URL('/api/shares', withTrailingSlash(serviceUrl))
+    this.nasPrepareUrl = new URL('/api/shares/prepare', this.sharesUrl)
+    this.nasCommitUrl = new URL('/api/shares/commit', this.sharesUrl)
   }
 
   /** Create one immutable Local snapshot and return a browser-safe result. */
@@ -142,6 +164,40 @@ export class ArtifactHubClient {
     return parseShareResult(envelope.resultObj)
   }
 
+  /** Reserve an Artifact Version path without asking the Hub to read the Session file. */
+  async prepareNasShare(
+    request: TrustedLocalShareRequest,
+    signal?: AbortSignal,
+  ): Promise<PreparedNasUpload> {
+    const result = await this.post(this.nasPrepareUrl, {
+      session_id: request.sessionId,
+      source_path: request.sourcePath,
+      artifact_type: inferArtifactType(request.sourcePath),
+      created_by_id: this.identity.createdById,
+      created_by_name: this.identity.createdByName,
+      dsh_workspace_path: request.dshWorkspacePath,
+      ...(request.dshWorkspaceId === undefined ? {} : { dsh_workspace_id: request.dshWorkspaceId }),
+      ...(request.dshWorkspaceTitle === undefined ? {} : { dsh_workspace_title: request.dshWorkspaceTitle }),
+      ...(request.artifactId === undefined ? {} : { artifact_id: request.artifactId }),
+    }, signal)
+    return parsePreparedNasUpload(result)
+  }
+
+  /** Commit one copied NAS snapshot after the Hub independently validates its checksum. */
+  async commitNasShare(
+    commit: NasCommit,
+    signal?: AbortSignal,
+  ): Promise<LocalShareResult> {
+    const result = await this.post(this.nasCommitUrl, {
+      upload_id: commit.uploadId,
+      created_by_id: this.identity.createdById,
+      created_by_name: this.identity.createdByName,
+      checksum: commit.checksum,
+      ...(commit.expiresAt === undefined ? {} : { expires_at: commit.expiresAt }),
+    }, signal)
+    return parseShareResult(result)
+  }
+
   /** List only browser-safe metadata for Shares owned by the trusted identity. */
   async listCreatedShares(signal?: AbortSignal): Promise<readonly CreatedShare[]> {
     const url = new URL(this.sharesUrl)
@@ -164,6 +220,30 @@ export class ArtifactHubClient {
       throw new ArtifactHubRequestError(502, 'Artifact Hub returned an invalid created-share list')
     }
     return envelope.resultObj.items.map(parseCreatedShare)
+  }
+
+  private async post(
+    url: URL,
+    body: Readonly<Record<string, unknown>>,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    let response: Response
+    try {
+      response = await this.fetcher(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+        ...(signal === undefined ? {} : { signal }),
+      })
+    } catch (error: unknown) {
+      if (signal?.aborted === true) throw error
+      throw new ArtifactHubRequestError(502, `Artifact Hub is unavailable: ${messageOf(error)}`)
+    }
+    const envelope = await readEnvelope(response)
+    if (!response.ok) {
+      throw new ArtifactHubRequestError(response.status, envelope.resultMsg)
+    }
+    return envelope.resultObj
   }
 }
 
@@ -219,6 +299,23 @@ function parseShareResult(value: unknown): LocalShareResult {
     name: result.name,
     url: result.url,
     expiresAt: result.expires_at,
+  }
+}
+
+function parsePreparedNasUpload(value: unknown): PreparedNasUpload {
+  if (!isRecord(value)
+    || typeof value.upload_id !== 'string'
+    || typeof value.storage_key !== 'string'
+    || value.storage_mode !== 'NAS'
+    || typeof value.version !== 'number'
+    || !Number.isInteger(value.version)
+    || typeof value.name !== 'string') {
+    throw new ArtifactHubRequestError(502, 'Artifact Hub returned an invalid NAS reservation')
+  }
+  const upload = value as unknown as HubPreparedNasUpload
+  return {
+    uploadId: upload.upload_id,
+    storageKey: upload.storage_key,
   }
 }
 

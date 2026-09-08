@@ -21,9 +21,19 @@ DSH Host ──▶ http://hub-internal:8000  (management API, private network)
 
 ## 0. Choose a storage mode first
 
-The plugin currently implements **Local** mode only. Local requires that the Hub can read the DSH session workspaces by absolute path — in practice the Hub and DSH run on the same machine, or the session workspaces sit on a shared mount both can see.
+The plugin supports **Local** and **NAS** modes.
 
-NAS mode (plugin copies to a shared NAS, Hub validates) is designed and implemented on the Hub side (`/api/shares/prepare` + `/api/shares/commit`), but the plugin does not drive it yet. If you need it, follow the design in [`overview.md`](overview.md) §12–16 and call the two-phase API yourself, or wait for plugin support.
+- Local requires the Hub to read each DSH session workspace at the same absolute path. In practice, run both processes on one machine or mount the workspace identically on both machines.
+- NAS requires both processes to mount the same shared storage with permissions that let the DSH service create files and the Hub service read them. Set `HUB_ARTIFACT_ROOT` to the Hub-side mount and set `DSH_ARTIFACT_HUB_ARTIFACT_ROOT` to the DSH-side mount; these absolute paths may differ. The plugin uses the relative `storage_key` returned by `prepare`, copies the Session file directly to its own mount, and then calls `commit` for Hub validation.
+
+Select NAS mode in the DSH Host environment:
+
+```bash
+DSH_ARTIFACT_HUB_MODE=nas
+DSH_ARTIFACT_HUB_ARTIFACT_ROOT=/mnt/dsh-nas/artifacts
+```
+
+`HUB_STORAGE_MODE` selects the database adapter (`sqlite`/`mysql`); it does not select the Artifact copy mode.
 
 ## 1. Run the Hub as a service
 
@@ -102,10 +112,12 @@ dsh plugin --profile web add ./plugins/dsh-artifact-hub
 | Variable | Production value | Meaning |
 |---|---|---|
 | `DSH_ARTIFACT_HUB_URL` | `http://hub-internal:8000` | Management API base (not the public share origin) |
+| `DSH_ARTIFACT_HUB_MODE` | `local` or `nas` | Selects which process copies Artifact bytes |
+| `DSH_ARTIFACT_HUB_ARTIFACT_ROOT` | e.g. `/mnt/dsh-nas/artifacts` | Required in NAS mode; existing writable DSH-side NAS mount |
 | `DSH_ARTIFACT_HUB_CREATED_BY_ID` | e.g. `user-001` | Identity stamped on artifacts/shares created by this DSH host |
 | `DSH_ARTIFACT_HUB_CREATED_BY_NAME` | e.g. `Alice` | Display name (defaults to the ID) |
 
-Remember the Local-mode filesystem requirement: this host's session workspaces must be readable by the Hub at the same absolute path.
+In Local mode, the Hub must read this host's session workspaces at the same absolute paths. In NAS mode, verify the DSH-side Artifact root is an existing writable mount of the same storage configured as the Hub's `HUB_ARTIFACT_ROOT`.
 
 ## 5. Verify
 
@@ -136,5 +148,4 @@ Then create a real share from a DSH session and confirm the returned link opens 
 
 - No Docker image or compose file yet — deployment is build-from-source as described above.
 - No release packaging/versioning; upgrades are git-based.
-- NAS mode lacks plugin-side support (see §0).
 - No authentication on management APIs beyond network privacy — keep the Hub port on a trusted network.

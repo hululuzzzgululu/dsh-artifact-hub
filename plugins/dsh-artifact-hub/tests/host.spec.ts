@@ -139,6 +139,66 @@ describe('ArtifactHubClient', () => {
     expect(result).not.toHaveProperty('token')
   })
 
+  it('maps the two-phase NAS prepare and commit requests', async () => {
+    const fetcher = vi.fn<Fetch>()
+      .mockResolvedValueOnce(Response.json({
+        resultCode: '0',
+        resultMsg: 'success',
+        resultObj: {
+          upload_id: 'upl_1',
+          artifact_id: 'art_1',
+          version: 1,
+          storage_mode: 'NAS',
+          storage_key: 'artifacts/art_1/v1/report.md',
+          target_path: '/hub-only-mount/artifacts/art_1/v1/report.md',
+          name: 'report.md',
+        },
+      }, { status: 201 }))
+      .mockResolvedValueOnce(Response.json({
+        resultCode: '0', resultMsg: 'success', resultObj: HUB_RESULT,
+      }, { status: 201 }))
+    const client = new ArtifactHubClient('http://hub.internal', HUB_IDENTITY, fetcher)
+    const request = {
+      sessionId: 'sess-1',
+      workspaceRoot: '/workspaces/project-one',
+      dshWorkspaceId: 'workspace-1',
+      dshWorkspacePath: '/workspaces/project-one',
+      dshWorkspaceTitle: 'Project One',
+      sourcePath: 'reports/report.md',
+      expiresAt: '2026-12-31T16:00:00.000Z',
+    }
+
+    await expect(client.prepareNasShare(request)).resolves.toEqual({
+      uploadId: 'upl_1',
+      storageKey: 'artifacts/art_1/v1/report.md',
+    })
+    await expect(client.commitNasShare({
+      uploadId: 'upl_1', checksum: 'abc123', expiresAt: request.expiresAt,
+    })).resolves.toMatchObject({ shareId: 'shr_1' })
+
+    const [prepareUrl, prepareInit] = fetcher.mock.calls[0]!
+    expect(String(prepareUrl)).toBe('http://hub.internal/api/shares/prepare')
+    expect(JSON.parse(String(prepareInit?.body))).toEqual({
+      session_id: 'sess-1',
+      source_path: 'reports/report.md',
+      artifact_type: 'markdown',
+      created_by_id: 'user-1',
+      created_by_name: 'User One',
+      dsh_workspace_id: 'workspace-1',
+      dsh_workspace_path: '/workspaces/project-one',
+      dsh_workspace_title: 'Project One',
+    })
+    const [commitUrl, commitInit] = fetcher.mock.calls[1]!
+    expect(String(commitUrl)).toBe('http://hub.internal/api/shares/commit')
+    expect(JSON.parse(String(commitInit?.body))).toEqual({
+      upload_id: 'upl_1',
+      created_by_id: 'user-1',
+      created_by_name: 'User One',
+      checksum: 'abc123',
+      expires_at: '2026-12-31T16:00:00.000Z',
+    })
+  })
+
   it('lists the trusted creator shares and strips storage metadata', async () => {
     const fetcher = vi.fn<Fetch>(async () => Response.json({
       resultCode: '0', resultMsg: 'success', resultObj: { items: [HUB_LIST_ITEM] },
