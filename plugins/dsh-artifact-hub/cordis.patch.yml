@@ -1,0 +1,8 @@
+- insert:
+    - id: artifact-hub-local-share
+      name: dsh-artifact-hub
+      config:
+        mode: local
+        serviceUrl: !!js process.env.DSH_ARTIFACT_HUB_URL ?? 'http://127.0.0.1:8000'
+        createdById: !!js process.env.DSH_ARTIFACT_HUB_CREATED_BY_ID ?? process.env.DSH_ARTIFACT_HUB_CREATED_BY ?? 'dsh-local-user'
+        createdByName: !!js process.env.DSH_ARTIFACT_HUB_CREATED_BY_NAME ?? process.env.DSH_ARTIFACT_HUB_CREATED_BY_ID ?? process.env.DSH_ARTIFACT_HUB_CREATED_BY ?? 'dsh-local-user'

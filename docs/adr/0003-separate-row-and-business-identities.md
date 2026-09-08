@@ -1,0 +1,5 @@
+# Separate database row identity from business identity
+
+Each implemented `dsh_` table uses an internal auto-incrementing 64-bit row ID named `id` and a unique business ID named for its entity: `artifact_id`, `artifact_version_id`, `share_id`, or `upload_id`. New business IDs are canonical UUID strings. Repository relationships and all API/service boundaries use business IDs; the numeric row ID stays private to the database adapter.
+
+SQLite represents the row ID as `INTEGER PRIMARY KEY AUTOINCREMENT`, whose row identity is signed 64-bit, while MySQL uses `BIGINT UNSIGNED AUTO_INCREMENT`. Repository initialization migrates the previous string-primary-key layout by preserving each existing string ID as the new business ID and rebuilding or altering foreign keys to reference those business keys. This retains existing URLs and relationships while allowing databases to use compact, storage-native row identities. The tradeoff is an additional unique index per entity and adapter-owned startup migration logic.
