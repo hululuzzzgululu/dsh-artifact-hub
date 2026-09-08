@@ -26,6 +26,8 @@ The plugin supports **Local** and **NAS** modes.
 - Local requires the Hub to read each DSH session workspace at the same absolute path. In practice, run both processes on one machine or mount the workspace identically on both machines.
 - NAS requires both processes to mount the same shared storage with permissions that let the DSH service create files and the Hub service read them. Set `HUB_ARTIFACT_ROOT` to the Hub-side mount and set `DSH_ARTIFACT_HUB_ARTIFACT_ROOT` to the DSH-side mount; these absolute paths may differ. The plugin uses the relative `storage_key` returned by `prepare`, copies the Session file directly to its own mount, and then calls `commit` for Hub validation.
 
+Artifact files are stored below `{configured artifact root}/{created_by_id}/artifacts/` in both modes. The `created_by_id` is the DSH Host identity, and is also the first path component of the persisted relative `storage_key`.
+
 Select NAS mode in the DSH Host environment:
 
 ```bash

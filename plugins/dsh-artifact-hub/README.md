@@ -60,6 +60,10 @@ dsh web
 3. Host 在 NAS 目标目录内写临时文件，同时计算 SHA-256，完成后原子替换为最终文件。
 4. Host 调用 `POST /api/shares/commit`；Hub 从自己的 NAS 挂载重新读取文件、核对 checksum/size，并创建 Artifact Version 与 Share。
 
+`storage_key` 的格式为
+`{created_by_id}/artifacts/{artifact_id}/v{version}/{name}`，所以 NAS 上的实际文件位于
+`DSH_ARTIFACT_HUB_ARTIFACT_ROOT/{created_by_id}/artifacts/` 下。
+
 “分享中心”通过同一条 loopback-only RPC 从 Host 查询可信 `createdById` 对应的分享记录，并按 `artifactId` 汇总各版本的唯一 Share。浏览器不提交创建者身份，也不会收到 storage key 或 checksum；Hub 为仍然有效的记录签发 10 分钟短时预览 URL 供“预览”跳转，另返回从落库 token 重建的持久分享链接（`shareUrl`）。分享弹窗打开时会查询当前文件是否已有有效分享：已有则保留完整表单（分享方式、权限、可编辑的到期时间，均回填），仅把底部按钮换成“复制链接/打开链接”且不再展示链接本身——修改到期时间后点击任一按钮会先通过幂等接口保存（token 不变）再复制/打开；仅撤销过的文件回退到全新表单。页面支持文件/版本/Share ID 搜索与状态筛选，控件使用 DSH 主题变量，可随明暗主题切换。
 
 当前分享方式固定为“获得链接的任何人”（`LINK`），权限固定为“查看和下载”（`VIEW_DOWNLOAD`）；弹窗可选设置有效期。组织内分享、指定用户分享、ShareGrant 和“分享给我的”视图尚未实现。

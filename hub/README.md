@@ -56,6 +56,10 @@ data/artifacts/  # Hub Artifact storage
 data/hub.sqlite3 # Hub metadata
 ```
 
+Artifact 文件实际按创建者隔离在
+`data/artifacts/{created_by_id}/artifacts/{artifact_id}/v{version}/` 下；数据库保存的
+`storage_key` 是相对于 `HUB_ARTIFACT_ROOT` 的路径。
+
 可通过环境变量覆盖：`HUB_HOST`、`HUB_PORT`、`HUB_BASE_URL`、`HUB_STORAGE_MODE`、`HUB_ARTIFACT_ROOT`、`HUB_DATABASE_PATH`。
 
 Local 分享的 Session File 位于 DSH session 的 `header.cwd` workspace 中。DSH Host 根据浏览器提交的 `session_id` 查询可信 `workspace_root`，再从 `ctx.workspaceRegistry` 读取 Workspace 的稳定 ID、规范路径和标题，与相对 `source_path` 一起发送给 Hub；`session_id` 只作为来源元数据，不参与文件路径拼接。Hub 和 DSH Host 必须能以相同绝对路径访问该 workspace。

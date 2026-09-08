@@ -65,6 +65,15 @@ class ArtifactHubServiceTests(unittest.TestCase):
         self.assertEqual(artifact["dsh_workspace_path"], str(self.workspace.resolve()))
         self.assertEqual(artifact["dsh_workspace_title"], "Project One")
         self.assertEqual(artifact["created_by_name"], "User One")
+        snapshot = (
+            self.artifacts
+            / "user-1"
+            / "artifacts"
+            / result.artifact_id
+            / "v1"
+            / "report.html"
+        )
+        self.assertEqual(snapshot.read_text(encoding="utf-8"), "first version")
 
         source.write_text("changed later", encoding="utf-8")
         content = self.hub.read_share_content(result.token)
@@ -84,6 +93,20 @@ class ArtifactHubServiceTests(unittest.TestCase):
                 source_path="../../outside.txt",
                 created_by_id="user-1",
             )
+
+    def test_creator_id_must_be_safe_for_storage_path(self):
+        source = self.workspace / "report.txt"
+        source.write_text("content", encoding="utf-8")
+
+        for created_by_id in ("../escape", "nested/user", r"nested\\user"):
+            with self.subTest(created_by_id=created_by_id):
+                with self.assertRaises(HubError):
+                    self.hub.create_local_share(
+                        session_id="sess-safe-id",
+                        workspace_root=self.workspace,
+                        source_path="report.txt",
+                        created_by_id=created_by_id,
+                    )
 
     def test_same_artifact_can_publish_a_new_version_without_changing_v1(self):
         source = self.workspace / "report.txt"
@@ -320,7 +343,10 @@ class ArtifactHubServiceTests(unittest.TestCase):
 
         self.assertEqual(prepared.version, 1)
         self.assertEqual(str(uuid.UUID(prepared.upload_id)), prepared.upload_id)
-        self.assertEqual(prepared.storage_key, "artifacts/{}/v1/report.csv".format(prepared.artifact_id))
+        self.assertEqual(
+            prepared.storage_key,
+            "user-2/artifacts/{}/v1/report.csv".format(prepared.artifact_id),
+        )
         target = Path(prepared.target_path)
         target.parent.mkdir(parents=True)
         target.write_text("a,b\n1,2\n", encoding="utf-8")

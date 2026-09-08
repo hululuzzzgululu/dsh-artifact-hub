@@ -100,7 +100,9 @@ class ArtifactHub:
             artifact_type=artifact_type,
         )
         final_name = artifact["name"]
-        storage_key = self.storage.storage_key(artifact["artifact_id"], version, final_name)
+        storage_key = self.storage.storage_key(
+            created_by_id, artifact["artifact_id"], version, final_name
+        )
         self.storage.copy_snapshot(source, storage_key)
         try:
             size, checksum = self.storage.inspect(storage_key)
@@ -173,7 +175,9 @@ class ArtifactHub:
         )
         if artifact_is_new:
             self.repository.create_artifact(self._artifact_values(artifact))
-        storage_key = self.storage.storage_key(artifact["artifact_id"], version, artifact["name"])
+        storage_key = self.storage.storage_key(
+            created_by_id, artifact["artifact_id"], version, artifact["name"]
+        )
         upload_id = self._id("upl")
         self.repository.create_upload(
             {
@@ -623,6 +627,9 @@ class ArtifactHub:
         created_by_id = created_by_id.strip()
         if len(created_by_id) > 128:
             raise ValidationError("created_by_id must not exceed 128 characters")
+        # The creator ID is part of every artifact's relative storage key. Keep
+        # it a single path component so it cannot escape the configured root.
+        FilesystemStorage._validate_component(created_by_id, "created_by_id")
         if not isinstance(created_by_name, str) or not created_by_name.strip():
             created_by_name = created_by_id
         else:

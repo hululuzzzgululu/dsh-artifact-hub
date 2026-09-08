@@ -24,7 +24,7 @@ describe('NAS share flow', () => {
     try {
       const source = '# generated on the DSH host\n'
       await writeFile(join(fixture.workspace, 'reports', 'report.md'), source)
-      const storageKey = 'artifacts/art_1/v1/report.md'
+      const storageKey = 'user-1/artifacts/art_1/v1/report.md'
       const fetcher = vi.fn<Fetch>(async (input, init) => {
         const url = String(input)
         if (url.endsWith('/api/shares/prepare')) {
@@ -37,7 +37,7 @@ describe('NAS share flow', () => {
               version: 1,
               storage_mode: 'NAS',
               storage_key: storageKey,
-              target_path: '/different/hub/mount/artifacts/art_1/v1/report.md',
+              target_path: '/different/hub/mount/user-1/artifacts/art_1/v1/report.md',
               name: 'report.md',
             },
           }, { status: 201 })
@@ -65,7 +65,7 @@ describe('NAS share flow', () => {
       expect(response).toMatchObject({ ok: true, value: { shareId: 'shr_1' } })
       expect(fetcher).toHaveBeenCalledTimes(2)
       expect(await readFile(join(fixture.artifactRoot, storageKey), 'utf8')).toBe(source)
-      expect(await readdir(join(fixture.artifactRoot, 'artifacts/art_1/v1'))).toEqual(['report.md'])
+      expect(await readdir(join(fixture.artifactRoot, 'user-1/artifacts/art_1/v1'))).toEqual(['report.md'])
       const prepareBody = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body)) as Readonly<Record<string, unknown>>
       expect(prepareBody).not.toHaveProperty('workspace_root')
       expect(prepareBody).toMatchObject({

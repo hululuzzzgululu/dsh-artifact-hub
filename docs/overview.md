@@ -279,12 +279,13 @@ created_at
 storage_mode = LOCAL | NAS
 ```
 
-`storage_key` 使用相对路径，不保存实际机器绝对路径。
+`storage_key` 使用相对路径，不保存实际机器绝对路径。路径的第一段是
+`created_by_id`，因此不同 DSH Host 的 Artifact 会隔离在各自的用户目录下。
 
 例如：
 
 ```
-artifacts/550e8400-e29b-41d4-a716-446655440000/v1/
+user-001/artifacts/550e8400-e29b-41d4-a716-446655440000/v1/report.html
 ```
 
 ---
@@ -614,7 +615,7 @@ Local Artifact Storage
              │ Hub snapshot
              ▼
 
-/data/artifacts/550e8400-e29b-41d4-a716-446655440000/v1/report.html
+/data/artifacts/user-001/artifacts/550e8400-e29b-41d4-a716-446655440000/v1/report.html
 ```
 
 ---
@@ -814,7 +815,7 @@ Hub：
   "artifact_id": "550e8400-e29b-41d4-a716-446655440000",
   "version": 1,
   "upload_id": "550e8400-e29b-41d4-a716-446655440001",
-  "storage_key": "artifacts/550e8400-e29b-41d4-a716-446655440000/v1/"
+  "storage_key": "user-001/artifacts/550e8400-e29b-41d4-a716-446655440000/v1/report.html"
 }
 ```
 
@@ -833,7 +834,7 @@ source:
 copy：
 
 ```
-/mnt/nas/artifacts/550e8400-e29b-41d4-a716-446655440000/v1/report.html
+/mnt/nas/artifacts/user-001/artifacts/550e8400-e29b-41d4-a716-446655440000/v1/report.html
 ```
 
 ---
@@ -901,31 +902,33 @@ Share
 
 # 17. Storage Path
 
-建议物理目录：
+建议物理目录（`artifact_root` 是配置的根目录）：
 
 ```
-artifacts/
-└── {artifact_id}/
-    └── v{version}/
-        └── content
+{user_id}/
+└── artifacts/
+    └── {artifact_id}/
+        └── v{version}/
+            └── content
 ```
 
 例如：
 
 ```
-artifacts/
-└── 550e8400-e29b-41d4-a716-446655440000/
-    ├── v1/
-    │   └── report.html
-    └── v2/
-        └── report.html
+user-001/
+└── artifacts/
+    └── 550e8400-e29b-41d4-a716-446655440000/
+        ├── v1/
+        │   └── report.html
+        └── v2/
+            └── report.html
 ```
 
 数据库保存：
 
 ```
 storage_key =
-550e8400-e29b-41d4-a716-446655440000/v1/
+user-001/artifacts/550e8400-e29b-41d4-a716-446655440000/v1/report.html
 ```
 
 不要保存：
@@ -1206,7 +1209,7 @@ POST /api/shares/prepare
   "artifact_id": "550e8400-e29b-41d4-a716-446655440000",
   "version": 1,
   "upload_id": "550e8400-e29b-41d4-a716-446655440001",
-  "storage_key": "550e8400-e29b-41d4-a716-446655440000/v1/"
+  "storage_key": "user-001/artifacts/550e8400-e29b-41d4-a716-446655440000/v1/report.html"
 }
 ```
 

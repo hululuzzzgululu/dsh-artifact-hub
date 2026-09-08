@@ -149,8 +149,8 @@ describe('ArtifactHubClient', () => {
           artifact_id: 'art_1',
           version: 1,
           storage_mode: 'NAS',
-          storage_key: 'artifacts/art_1/v1/report.md',
-          target_path: '/hub-only-mount/artifacts/art_1/v1/report.md',
+          storage_key: 'user-1/artifacts/art_1/v1/report.md',
+          target_path: '/hub-only-mount/user-1/artifacts/art_1/v1/report.md',
           name: 'report.md',
         },
       }, { status: 201 }))
@@ -170,7 +170,7 @@ describe('ArtifactHubClient', () => {
 
     await expect(client.prepareNasShare(request)).resolves.toEqual({
       uploadId: 'upl_1',
-      storageKey: 'artifacts/art_1/v1/report.md',
+      storageKey: 'user-1/artifacts/art_1/v1/report.md',
     })
     await expect(client.commitNasShare({
       uploadId: 'upl_1', checksum: 'abc123', expiresAt: request.expiresAt,
