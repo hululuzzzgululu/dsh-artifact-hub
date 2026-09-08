@@ -11,8 +11,8 @@
 - Repository 通过抽象接口隔离数据库实现，当前提供 SQLite 和 MySQL adapters，可通过 `config.storage.mode` 切换。
 - 配置模型参考 DataMind 的 `config_objects.py`：`HubConfig` 以顶层 `config` 对象包裹运行参数，`config.storage` 下包含 `mode`、`sqlite` 和 `server`，其中 `server` 表示 MySQL-compatible 数据库。
 - API schema 和领域返回模型统一使用 Pydantic `BaseModel`，领域结果模型为不可变模型。
-- 每个 Artifact Version 最多只有一条 Share；再次分享同一版本会覆盖原 Share 的 token、有效期和状态，保留 `share_id`，旧链接随即失效。
-- 访问 token 只保存 SHA-256 hash；创建或覆盖响应是唯一返回原始分享 token 的地方。可信创建者列表会为有效记录签发 10 分钟、进程级密钥签名的短时预览凭证，不需要恢复或持久化原始 token。
+- 每个 Artifact Version 最多只有一条 Share；再次分享同一版本是幂等的：复用原 Share 的 `share_id`、token 和创建时间，仅更新有效期，旧链接保持有效。已撤销（revoked）的 Share 被重新分享时会换新 token 并清除撤销状态。
+- 访问 token 同时保存原文与 SHA-256 hash：hash 用于访问查找，原文用于同版本幂等重发时返回同一链接（历史数据原文为 NULL，首次重发后回填）。可信创建者列表会为有效记录签发 10 分钟、进程级密钥签名的短时预览凭证。
 - 暂不实现 ShareGrant、“分享给我的”、PRIVATE 分享、认证和对象存储。
 
 ## 本地一键联调
@@ -118,7 +118,7 @@ Content-Type: application/json
 
 当前分享方式固定为“获得链接的任何人”（`LINK`），权限固定为“查看和下载”（`VIEW_DOWNLOAD`），创建接口无需传这两个字段，传入其他值会返回 422。`expires_at` 可选，接受 ISO-8601 时间；到期后元数据、预览和下载接口都会拒绝访问。
 
-同一创建者再次分享同一 Session 的同一路径时，会复用原 Artifact；若文件 checksum 与最新版本一致，则复用 Artifact Version 并覆盖该版本唯一的 Share。覆盖会保留 `share_id`，重新生成 token，更新有效期并清除撤销状态，因此旧链接立即失效。文件内容发生变化时才创建下一个 Artifact Version 及其 Share。
+同一创建者再次分享同一 Session 的同一路径时，会复用原 Artifact；若文件 checksum 与最新版本一致，则复用 Artifact Version，并对该版本唯一的 Share 做幂等更新：保留 `share_id`、token 和创建时间，仅更新有效期，旧链接保持有效；若原 Share 已撤销，则重新生成 token 并清除撤销状态（旧链接仍然失效）。文件内容发生变化时才创建下一个 Artifact Version 及其 Share。
 
 NAS 流程：
 
