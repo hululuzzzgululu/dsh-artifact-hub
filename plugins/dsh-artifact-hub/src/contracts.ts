@@ -29,6 +29,8 @@ export interface CreatedShare {
   readonly artifactVersionId: string
   readonly version: number
   readonly name: string
+  readonly sourceSessionId: string
+  readonly sourcePath: string
   readonly mimeType: string
   readonly size: number
   readonly visibility: 'LINK'
@@ -38,6 +40,9 @@ export interface CreatedShare {
   readonly revokedAt: string | null
   /** Short-lived owner preview URL. Null when the Share is no longer active. */
   readonly previewUrl: string | null
+  /** Durable owner share URL rebuilt from the stored token. Null for revoked
+   * shares and legacy rows migrated before the token was persisted. */
+  readonly shareUrl: string | null
 }
 
 /** DSH's business-result envelope, narrowed to what this plugin consumes. */

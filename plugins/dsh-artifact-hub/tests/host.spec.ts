@@ -36,6 +36,8 @@ const HUB_IDENTITY = { createdById: 'user-1', createdByName: 'User One' }
 
 const HUB_LIST_ITEM = {
   ...HUB_RESULT,
+  source_session_id: 'sess-1',
+  source_path: 'reports/report.md',
   mime_type: 'text/markdown',
   storage_mode: 'LOCAL',
   storage_key: '/private/snapshot/path',
@@ -48,6 +50,7 @@ const HUB_LIST_ITEM = {
   created_at: '2026-09-07T10:00:00Z',
   revoked_at: null,
   url: 'https://share.example/s/preview.ticket',
+  share_url: 'https://share.example/s/token',
 }
 
 describe('registerLocalShareRoute', () => {
@@ -149,10 +152,12 @@ describe('ArtifactHubClient', () => {
     expect(init).toMatchObject({ method: 'GET' })
     expect(shares).toEqual([{
       shareId: 'shr_1', artifactId: 'art_1', artifactVersionId: 'av_1', version: 1,
-      name: 'report.md', mimeType: 'text/markdown', size: 42,
+      name: 'report.md', sourceSessionId: 'sess-1', sourcePath: 'reports/report.md',
+      mimeType: 'text/markdown', size: 42,
       visibility: 'LINK', permission: 'VIEW_DOWNLOAD',
       createdAt: '2026-09-07T10:00:00Z', expiresAt: null, revokedAt: null,
       previewUrl: 'https://share.example/s/preview.ticket',
+      shareUrl: 'https://share.example/s/token',
     }])
     expect(shares[0]).not.toHaveProperty('storageKey')
     expect(shares[0]).not.toHaveProperty('checksum')

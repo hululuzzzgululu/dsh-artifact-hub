@@ -7,7 +7,6 @@ import {
   Link2,
   LockKeyhole,
   RefreshCw,
-  ShieldCheck,
   UserRound,
 } from 'lucide-react'
 import { ArtifactPreview } from './ArtifactPreview'
@@ -91,15 +90,6 @@ function SharePage({ share, token }: { readonly share: PublicShare; readonly tok
           <div className="meta-row">
             <span><UserRound aria-hidden="true" /> 分享者 <strong>{share.createdByName}</strong></span>
             <span><CalendarClock aria-hidden="true" /> 分享于 <time dateTime={share.createdAt}>{formatDate(share.createdAt)}</time></span>
-          </div>
-        </div>
-        <div className="heading-actions">
-          <a className="download-button" href={downloadUrl(token)}>
-            <Download aria-hidden="true" />
-            下载文件
-          </a>
-          <div className="access-summary" aria-label="分享权限">
-            <span className="access-permission"><ShieldCheck aria-hidden="true" /> 可查看和下载</span>
             {share.expiresAt !== null && (
               <span className="access-expiry">有效期至 <time dateTime={share.expiresAt}>{formatDate(share.expiresAt)}</time></span>
             )}
@@ -110,6 +100,10 @@ function SharePage({ share, token }: { readonly share: PublicShare; readonly tok
       <div className="preview-card">
         <div className="preview-toolbar">
           <span className="preview-title">文件预览</span>
+          <a className="download-link" href={downloadUrl(token)}>
+            <Download aria-hidden="true" />
+            下载
+          </a>
         </div>
         <div className="preview-surface">
           <ArtifactPreview
@@ -135,7 +129,6 @@ function LoadingPage() {
           <div className="skeleton skeleton-short" />
           <div className="skeleton skeleton-meta" />
         </div>
-        <div className="skeleton skeleton-action" />
       </div>
       <div className="preview-card loading-preview">
         <div className="preview-toolbar"><span className="preview-title">文件预览</span></div>

@@ -65,7 +65,7 @@ export function apply(ctx: Context): void {
     priority: -10,
     locale: NS,
     select: producedFiles,
-  }, props => <ArtifactFiles {...props} requestShare={requestShare} />))
+  }, props => <ArtifactFiles {...props} requestShare={requestShare} requestShares={requestShares} />))
   client.slots.inject('shell.overlay', () => client.slots.register({
     name: 'shell.overlay',
     id: 'artifact-hub-share-center',

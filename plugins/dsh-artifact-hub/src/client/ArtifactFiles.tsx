@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { LocalShareRequester } from './api.ts'
+import type { CreatedSharesRequester, LocalShareRequester } from './api.ts'
 import type { TurnTailOwner } from './deliverables.ts'
 import { ShareDialog, type Translate } from './ShareDialog.tsx'
 
@@ -9,11 +9,12 @@ export interface ArtifactFilesProps extends Pick<TurnTailOwner, 'openFile'> {
   readonly sessionId: string
   readonly t: Translate
   readonly requestShare: LocalShareRequester
+  readonly requestShares: CreatedSharesRequester
   readonly useSessions: <T>(selector: (state: SessionListSnapshot) => T) => T
 }
 
 /** Replace the standard produced-file row with open and share actions. */
-export function ArtifactFiles({ matched, openFile, sessionId, useSessions, t, requestShare }: ArtifactFilesProps) {
+export function ArtifactFiles({ matched, openFile, sessionId, useSessions, t, requestShare, requestShares }: ArtifactFilesProps) {
   const cwd = useSessions(state => state.byId[sessionId]?.cwd)
   const [sharing, setSharing] = useState<ShareTarget | null>(null)
   return (
@@ -49,6 +50,7 @@ export function ArtifactFiles({ matched, openFile, sessionId, useSessions, t, re
           sourcePath={sharing.sourcePath}
           t={t}
           requestShare={requestShare}
+          requestShares={requestShares}
           onClose={() => { setSharing(null) }}
         />
       )}

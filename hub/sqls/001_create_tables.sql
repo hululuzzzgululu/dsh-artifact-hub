@@ -42,15 +42,15 @@ CREATE TABLE IF NOT EXISTS dsh_artifact_versions (
     created_by_name VARCHAR(128) NOT NULL COMMENT '该版本发布者的展示名称；取不到时与 created_by_id 相同',
     created_at VARCHAR(64) NOT NULL COMMENT '创建时间（ISO-8601）',
     UNIQUE KEY uk_dsh_artifact_versions_artifact_version_id (artifact_version_id),
-    UNIQUE KEY uk_dsh_artifact_versions_artifact_version (artifact_id, version),
-    CONSTRAINT fk_dsh_version_artifact FOREIGN KEY (artifact_id) REFERENCES dsh_artifacts (artifact_id)
+    UNIQUE KEY uk_dsh_artifact_versions_artifact_version (artifact_id, version)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = 'Artifact 不可变版本快照';
 
 CREATE TABLE IF NOT EXISTS dsh_shares (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '内部自增行主键，不对外暴露',
     share_id CHAR(36) NOT NULL COMMENT '业务 ID（UUID v4）',
     artifact_version_id CHAR(36) NOT NULL COMMENT '指向的 Artifact Version',
-    token_hash CHAR(64) NOT NULL COMMENT 'share token 的 SHA-256（hex），原始 token 不落库',
+    token_hash CHAR(64) NOT NULL COMMENT 'share token 的 SHA-256（hex），用于访问查找',
+    token VARCHAR(64) NULL COMMENT 'share token 原文，同版本幂等重发时复用同一链接（历史数据为 NULL，重发后回填）',
     visibility VARCHAR(32) NOT NULL COMMENT '可见性：LINK（预留 PRIVATE）',
     permission VARCHAR(32) NOT NULL COMMENT '权限：VIEW_DOWNLOAD（预留 VIEW_ONLY）',
     expires_at VARCHAR(64) NULL COMMENT '过期时间（ISO-8601），NULL 表示永不过期',
@@ -62,8 +62,7 @@ CREATE TABLE IF NOT EXISTS dsh_shares (
     UNIQUE KEY uk_dsh_shares_share_id (share_id),
     UNIQUE KEY uk_dsh_shares_token_hash (token_hash),
     UNIQUE KEY uk_dsh_shares_artifact_version_id (artifact_version_id),
-    INDEX idx_dsh_shares_created_by (created_by_id, created_at),
-    CONSTRAINT fk_dsh_share_version FOREIGN KEY (artifact_version_id) REFERENCES dsh_artifact_versions (artifact_version_id)
+    INDEX idx_dsh_shares_created_by (created_by_id, created_at)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '指向某个 Artifact Version 的访问分享';
 
 CREATE TABLE IF NOT EXISTS dsh_uploads (
@@ -82,6 +81,5 @@ CREATE TABLE IF NOT EXISTS dsh_uploads (
     created_at VARCHAR(64) NOT NULL COMMENT '创建时间（ISO-8601）',
     state VARCHAR(32) NOT NULL COMMENT '状态：PREPARED|COMMITTED',
     UNIQUE KEY uk_dsh_uploads_upload_id (upload_id),
-    INDEX idx_dsh_uploads_artifact_state (artifact_id, state),
-    CONSTRAINT fk_dsh_upload_artifact FOREIGN KEY (artifact_id) REFERENCES dsh_artifacts (artifact_id)
+    INDEX idx_dsh_uploads_artifact_state (artifact_id, state)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = 'NAS 两阶段上传的预留记录（prepare/commit）';

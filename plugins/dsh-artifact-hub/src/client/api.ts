@@ -24,6 +24,11 @@ export type LocalShareRequester = (
   signal?: AbortSignal,
 ) => Promise<LocalShareResult>
 
+/** UI-bound creator's-share list function passed into the sharing components. */
+export type CreatedSharesRequester = (
+  signal?: AbortSignal,
+) => Promise<readonly CreatedShare[]>
+
 /** List Shares created by the Host's trusted identity. */
 export async function requestCreatedShares(
   rpc: ClientConnectionRpc,
@@ -80,6 +85,8 @@ function isCreatedShare(value: unknown): value is CreatedShare {
     && typeof value.version === 'number'
     && Number.isInteger(value.version)
     && typeof value.name === 'string'
+    && typeof value.sourceSessionId === 'string'
+    && typeof value.sourcePath === 'string'
     && typeof value.mimeType === 'string'
     && typeof value.size === 'number'
     && Number.isFinite(value.size)
@@ -89,6 +96,7 @@ function isCreatedShare(value: unknown): value is CreatedShare {
     && (value.expiresAt === null || typeof value.expiresAt === 'string')
     && (value.revokedAt === null || typeof value.revokedAt === 'string')
     && (value.previewUrl === null || typeof value.previewUrl === 'string')
+    && (value.shareUrl === null || typeof value.shareUrl === 'string')
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {

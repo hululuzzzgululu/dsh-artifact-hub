@@ -93,6 +93,10 @@ class RepositorySchemaTests(unittest.TestCase):
                         "dsh_workspace_title",
                     ):
                         self.assertIn(workspace_column, columns)
+                if table_name == "dsh_shares":
+                    self.assertIn("token", columns)
+                    self.assertEqual(columns["token"]["type"], "TEXT")
+                    self.assertEqual(columns["token"]["notnull"], 0)
                 indexes = repository._connection.execute(  # noqa: SLF001
                     'PRAGMA index_list("{}")'.format(table_name)
                 ).fetchall()
@@ -135,6 +139,174 @@ class RepositorySchemaTests(unittest.TestCase):
         self.assertEqual(artifact["created_by_id"], "user-1")
         self.assertEqual(artifact["created_by_name"], "user-1")
         self.assertNotIn("id", artifact)
+
+    def test_sqlite_adds_the_token_column_to_an_existing_share_table(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "hub.sqlite3"
+            with sqlite3.connect(database_path) as connection:
+                for statement in SqliteArtifactRepository._CREATE_STATEMENTS:  # noqa: SLF001
+                    connection.execute(statement)
+                # Recreate dsh_shares without the token column to model a
+                # database written before the idempotent-token migration.
+                connection.execute("DROP TABLE dsh_shares")
+                connection.execute(
+                    """
+                    CREATE TABLE dsh_shares (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        share_id TEXT NOT NULL UNIQUE,
+                        artifact_version_id TEXT NOT NULL
+                            REFERENCES dsh_artifact_versions(artifact_version_id),
+                        token_hash TEXT NOT NULL UNIQUE,
+                        visibility TEXT NOT NULL,
+                        permission TEXT NOT NULL,
+                        expires_at TEXT,
+                        revoked_at TEXT,
+                        created_by_id TEXT NOT NULL,
+                        created_by_name TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO dsh_artifacts
+                    (artifact_id, source_session_id, source_path, name, artifact_type,
+                     dsh_workspace_id, dsh_workspace_path, dsh_workspace_title,
+                     created_by_id, created_by_name, created_at, status)
+                    VALUES ('art-1', 'session-1', 'report.md', 'report.md', NULL,
+                            NULL, NULL, NULL, 'user-1', 'User One',
+                            '2026-09-07T00:00:00Z', 'ACTIVE')
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO dsh_artifact_versions
+                    (artifact_version_id, artifact_id, version, mime_type, storage_mode,
+                     storage_key, entrypoint, size_bytes, checksum,
+                     created_by_id, created_by_name, created_at)
+                    VALUES ('av-1', 'art-1', 1, 'text/markdown', 'LOCAL',
+                            'artifacts/art-1/v1/report.md', 'report.md', 4, 'hash',
+                            'user-1', 'User One', '2026-09-07T00:00:00Z')
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO dsh_shares
+                    (share_id, artifact_version_id, token_hash, visibility, permission,
+                     expires_at, revoked_at, created_by_id, created_by_name,
+                     created_at, updated_at)
+                    VALUES ('share-1', 'av-1', 'token-hash-1', 'LINK', 'VIEW_DOWNLOAD',
+                            NULL, NULL, 'user-1', 'User One',
+                            '2026-09-07T00:00:00Z', '2026-09-07T00:00:00Z')
+                    """
+                )
+
+            repository = SqliteArtifactRepository(database_path)
+            share = repository.get_share_by_version_id("av-1")
+            repository.close()
+
+        self.assertEqual(share["share_id"], "share-1")
+        self.assertIsNone(share["token"])
+        self.assertEqual(share["source_session_id"], "session-1")
+        self.assertEqual(share["source_path"], "report.md")
+
+    def test_sqlite_get_share_by_version_id_returns_the_joined_row(self):
+        repository = SqliteArtifactRepository(":memory:")
+        try:
+            repository.create_artifact(
+                {
+                    "artifact_id": "art-1",
+                    "source_session_id": "session-1",
+                    "source_path": "docs/report.md",
+                    "name": "report.md",
+                    "artifact_type": "markdown",
+                    "dsh_workspace_id": None,
+                    "dsh_workspace_path": None,
+                    "dsh_workspace_title": None,
+                    "created_by_id": "user-1",
+                    "created_by_name": "User One",
+                    "created_at": "2026-09-08T00:00:00Z",
+                    "status": "ACTIVE",
+                }
+            )
+            repository.create_version(
+                {
+                    "artifact_version_id": "av-1",
+                    "artifact_id": "art-1",
+                    "version": 1,
+                    "mime_type": "text/markdown",
+                    "storage_mode": "LOCAL",
+                    "storage_key": "artifacts/art-1/v1/report.md",
+                    "entrypoint": "report.md",
+                    "size_bytes": 4,
+                    "checksum": "hash",
+                    "created_by_id": "user-1",
+                    "created_by_name": "User One",
+                    "created_at": "2026-09-08T00:00:00Z",
+                }
+            )
+            repository.upsert_share(
+                {
+                    "share_id": "share-1",
+                    "artifact_version_id": "av-1",
+                    "token_hash": "token-hash-1",
+                    "token": "token-raw-1",
+                    "visibility": "LINK",
+                    "permission": "VIEW_DOWNLOAD",
+                    "expires_at": None,
+                    "revoked_at": None,
+                    "created_by_id": "user-1",
+                    "created_by_name": "User One",
+                    "created_at": "2026-09-08T00:00:00Z",
+                    "updated_at": "2026-09-08T00:00:00Z",
+                }
+            )
+
+            share = repository.get_share_by_version_id("av-1")
+
+            self.assertEqual(share["share_id"], "share-1")
+            self.assertEqual(share["token"], "token-raw-1")
+            self.assertEqual(share["source_session_id"], "session-1")
+            self.assertEqual(share["source_path"], "docs/report.md")
+            self.assertIsNone(repository.get_share_by_version_id("av-missing"))
+        finally:
+            repository.close()
+
+    def test_mysql_adds_the_token_column_when_missing(self):
+        engine = _RecordingEngine()
+        inspector = SimpleNamespace(
+            get_table_names=lambda: ["dsh_shares"],
+            get_columns=lambda _table_name: [
+                {"name": "id"},
+                {"name": "share_id"},
+                {"name": "artifact_version_id"},
+                {"name": "token_hash"},
+                {"name": "visibility"},
+                {"name": "permission"},
+                {"name": "expires_at"},
+                {"name": "revoked_at"},
+                {"name": "created_by_id"},
+                {"name": "created_by_name"},
+                {"name": "created_at"},
+                {"name": "updated_at"},
+            ],
+            get_indexes=lambda _table_name: [
+                {
+                    "name": "uk_dsh_shares_artifact_version_id",
+                    "column_names": ["artifact_version_id"],
+                    "unique": True,
+                },
+            ],
+        )
+
+        with patch(
+            "artifact_hub.repositories.mysql.sa.inspect", return_value=inspector
+        ):
+            MysqlArtifactRepository(engine)
+
+        migration = "\n".join(engine.statements)
+        self.assertIn("ALTER TABLE dsh_shares ADD COLUMN token VARCHAR(64) NULL", migration)
 
     def test_sqlite_migrates_duplicate_version_shares_to_the_latest_row(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -436,10 +608,11 @@ class RepositorySchemaTests(unittest.TestCase):
             ),
             4,
         )
-        self.assertIn("REFERENCES dsh_artifacts(artifact_id)", migration)
-        self.assertIn(
-            "REFERENCES dsh_artifact_versions(artifact_version_id)", migration
-        )
+        self.assertIn("DROP FOREIGN KEY fk_dsh_version_artifact", migration)
+        self.assertIn("DROP FOREIGN KEY fk_dsh_share_version", migration)
+        self.assertIn("DROP FOREIGN KEY fk_dsh_upload_artifact", migration)
+        self.assertNotIn("ADD CONSTRAINT", migration)
+        self.assertNotIn("REFERENCES", migration)
         self.assertIn(
             "ADD UNIQUE KEY uk_dsh_shares_artifact_version_id (artifact_version_id)",
             migration,
@@ -513,7 +686,7 @@ class RepositorySchemaTests(unittest.TestCase):
             migration,
         )
 
-    def test_mysql_share_upsert_preserves_share_id_and_overwrites_access_state(self):
+    def test_mysql_share_upsert_preserves_share_id_and_created_at(self):
         engine = _RecordingEngine()
         inspector = SimpleNamespace(get_table_names=lambda: [])
         with patch(
@@ -527,6 +700,7 @@ class RepositorySchemaTests(unittest.TestCase):
                 "share_id": "share-new",
                 "artifact_version_id": "av-1",
                 "token_hash": "token-new",
+                "token": "token-raw-new",
                 "visibility": "LINK",
                 "permission": "VIEW_DOWNLOAD",
                 "expires_at": None,
@@ -541,9 +715,11 @@ class RepositorySchemaTests(unittest.TestCase):
         statement = engine.statements[0]
         self.assertIn("ON DUPLICATE KEY UPDATE", statement)
         self.assertIn("token_hash = VALUES(token_hash)", statement)
+        self.assertIn("token = VALUES(token)", statement)
         self.assertIn("expires_at = VALUES(expires_at)", statement)
         self.assertIn("revoked_at = VALUES(revoked_at)", statement)
         self.assertNotIn("share_id = VALUES(share_id)", statement)
+        self.assertNotIn("created_at = VALUES(created_at)", statement)
 
 
 if __name__ == "__main__":

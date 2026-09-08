@@ -187,7 +187,7 @@ ArtifactVersion
  Share
 ```
 
-每个 ArtifactVersion 最多对应一个当前 Share。再次分享同一版本会覆盖该 Share 的链接和配置，而不是新增一条点击历史。
+每个 ArtifactVersion 最多对应一个当前 Share。再次分享同一版本是幂等更新：复用原链接（token），仅更新有效期，而不是新增一条点击历史；只有原 Share 已被撤销时才换新链接。
 
 而不是：
 
@@ -298,6 +298,7 @@ id
 artifact_version_id
 
 token_hash
+token
 
 UNIQUE(artifact_version_id)
 
@@ -1059,6 +1060,7 @@ share_id
 artifact_version_id
 
 token_hash
+token
 
 UNIQUE(artifact_version_id)
 
@@ -1141,7 +1143,8 @@ checksum == current checksum
 
 ```
 复用 ArtifactVersion
-创建或覆盖该 ArtifactVersion 唯一的 Share
+幂等更新该 ArtifactVersion 唯一的 Share
+（复用 token，仅更新有效期；已撤销时换新 token）
 ```
 
 否则：

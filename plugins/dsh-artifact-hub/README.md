@@ -46,9 +46,9 @@ dsh web
 1. DSH Client 从本轮成功写入的文件列表取得 `sessionId` 和相对 `sourcePath`。
 2. 浏览器通过 DSH Connection RPC 调用 `/artifact-hub` channel 的 `shares` endpoint；浏览器不能指定 workspace 或创建者元数据。
 3. DSH Host 使用 `ctx.sessions.get(sessionId).header.cwd` 解析可信文件根目录，并在 `ctx.workspaceRegistry.list()` 中按 Session 成员关系取得 Workspace 的 `id/path/title`；未注册的旧 Session 只回退路径。Host 再按 `source_path` 扩展名推断 `artifact_type`（html/markdown/text/code/data/image/pdf/archive/other），加入受信任身份字段后调用 Hub 的 `POST /api/shares`。
-4. Hub 从 `<workspace_root>/<source_path>` 读取文件；同一来源会复用 Artifact，checksum 未变化时也会复用 Artifact Version，并覆盖该版本唯一的 Share。插件只把分享 URL 返回浏览器，不返回原始 token 字段。
+4. Hub 从 `<workspace_root>/<source_path>` 读取文件；同一来源会复用 Artifact，checksum 未变化时也会复用 Artifact Version，并对该版本唯一的 Share 做幂等更新：复用原 token，仅更新有效期，旧链接保持有效（原 Share 已撤销时才换新 token）。插件只把分享 URL 返回浏览器，不返回原始 token 字段。
 
-“分享中心”通过同一条 loopback-only RPC 从 Host 查询可信 `createdById` 对应的分享记录，并按 `artifactId` 汇总各版本的唯一 Share。浏览器不提交创建者身份，也不会收到 storage key、checksum 或原始分享 token；Hub 只为仍然有效的记录签发 10 分钟短时预览 URL，供文件名和“预览”操作跳转到 Share Web。页面支持文件/版本/Share ID 搜索与状态筛选，控件使用 DSH 主题变量，可随明暗主题切换。
+“分享中心”通过同一条 loopback-only RPC 从 Host 查询可信 `createdById` 对应的分享记录，并按 `artifactId` 汇总各版本的唯一 Share。浏览器不提交创建者身份，也不会收到 storage key 或 checksum；Hub 为仍然有效的记录签发 10 分钟短时预览 URL 供“预览”跳转，另返回从落库 token 重建的持久分享链接（`shareUrl`）。分享弹窗打开时会查询当前文件是否已有有效分享：已有则保留完整表单（分享方式、权限、可编辑的到期时间，均回填），仅把底部按钮换成“复制链接/打开链接”且不再展示链接本身——修改到期时间后点击任一按钮会先通过幂等接口保存（token 不变）再复制/打开；仅撤销过的文件回退到全新表单。页面支持文件/版本/Share ID 搜索与状态筛选，控件使用 DSH 主题变量，可随明暗主题切换。
 
 当前分享方式固定为“获得链接的任何人”（`LINK`），权限固定为“查看和下载”（`VIEW_DOWNLOAD`）；弹窗可选设置有效期。组织内分享、指定用户分享、ShareGrant、分享给我的视图和 NAS prepare/copy/commit 尚未实现。
 

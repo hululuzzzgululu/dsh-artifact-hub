@@ -43,6 +43,8 @@ interface HubCreatedShare {
   readonly artifact_version_id: string
   readonly version: number
   readonly name: string
+  readonly source_session_id: string
+  readonly source_path: string
   readonly mime_type: string
   readonly size: number
   readonly visibility: 'LINK'
@@ -51,6 +53,7 @@ interface HubCreatedShare {
   readonly expires_at: string | null
   readonly revoked_at: string | null
   readonly url: string | null
+  readonly share_url: string | null
 }
 
 /** Error returned when the Artifact Hub rejects or cannot satisfy a request. */
@@ -227,6 +230,8 @@ function parseCreatedShare(value: unknown): CreatedShare {
     || typeof value.version !== 'number'
     || !Number.isInteger(value.version)
     || typeof value.name !== 'string'
+    || typeof value.source_session_id !== 'string'
+    || typeof value.source_path !== 'string'
     || typeof value.mime_type !== 'string'
     || typeof value.size !== 'number'
     || !Number.isFinite(value.size)
@@ -235,7 +240,8 @@ function parseCreatedShare(value: unknown): CreatedShare {
     || typeof value.created_at !== 'string'
     || (value.expires_at !== null && typeof value.expires_at !== 'string')
     || (value.revoked_at !== null && typeof value.revoked_at !== 'string')
-    || (value.url !== null && typeof value.url !== 'string')) {
+    || (value.url !== null && typeof value.url !== 'string')
+    || (value.share_url !== null && typeof value.share_url !== 'string')) {
     throw new ArtifactHubRequestError(502, 'Artifact Hub returned an invalid created Share')
   }
   const share = value as unknown as HubCreatedShare
@@ -245,6 +251,8 @@ function parseCreatedShare(value: unknown): CreatedShare {
     artifactVersionId: share.artifact_version_id,
     version: share.version,
     name: share.name,
+    sourceSessionId: share.source_session_id,
+    sourcePath: share.source_path,
     mimeType: share.mime_type,
     size: share.size,
     visibility: share.visibility,
@@ -253,6 +261,7 @@ function parseCreatedShare(value: unknown): CreatedShare {
     expiresAt: share.expires_at,
     revokedAt: share.revoked_at,
     previewUrl: share.url,
+    shareUrl: share.share_url,
   }
 }
 

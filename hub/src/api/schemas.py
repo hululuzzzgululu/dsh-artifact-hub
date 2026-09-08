@@ -56,6 +56,8 @@ class ShareResponse(BaseModel):
     artifact_version_id: str
     version: int
     name: str
+    source_session_id: str
+    source_path: str
     mime_type: str
     storage_mode: str
     storage_key: str
@@ -69,6 +71,7 @@ class ShareResponse(BaseModel):
     revoked_at: Optional[str]
     created_at: str
     url: Optional[str]
+    share_url: Optional[str]
     token: Optional[str] = None
 
 

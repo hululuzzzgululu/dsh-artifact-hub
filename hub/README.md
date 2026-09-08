@@ -12,7 +12,7 @@
 - 配置模型参考 DataMind 的 `config_objects.py`：`HubConfig` 以顶层 `config` 对象包裹运行参数，`config.storage` 下包含 `mode`、`sqlite` 和 `server`，其中 `server` 表示 MySQL-compatible 数据库。
 - API schema 和领域返回模型统一使用 Pydantic `BaseModel`，领域结果模型为不可变模型。
 - 每个 Artifact Version 最多只有一条 Share；再次分享同一版本是幂等的：复用原 Share 的 `share_id`、token 和创建时间，仅更新有效期，旧链接保持有效。已撤销（revoked）的 Share 被重新分享时会换新 token 并清除撤销状态。
-- 访问 token 同时保存原文与 SHA-256 hash：hash 用于访问查找，原文用于同版本幂等重发时返回同一链接（历史数据原文为 NULL，首次重发后回填）。可信创建者列表会为有效记录签发 10 分钟、进程级密钥签名的短时预览凭证。
+- 访问 token 同时保存原文与 SHA-256 hash：hash 用于访问查找，原文用于同版本幂等重发时返回同一链接（历史数据原文为 NULL，首次重发后回填）。可信创建者列表除为有效记录签发 10 分钟、进程级密钥签名的短时预览凭证（`url`）外，还会返回从落库 token 重建的持久分享链接（`share_url`，已撤销或遗留无 token 的记录为 NULL）。
 - 暂不实现 ShareGrant、“分享给我的”、PRIVATE 分享、认证和对象存储。
 
 ## 本地一键联调
