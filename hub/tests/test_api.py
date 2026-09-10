@@ -97,7 +97,7 @@ class ArtifactHubFastAPITests(unittest.TestCase):
         content = self.client.get("/api/public/shares/{}/content".format(token))
         self.assertEqual(content.content, b"# from workspace")
 
-    def test_repeated_local_share_overwrites_the_version_share(self):
+    def test_repeated_local_share_reuses_the_same_token(self):
         request = {
             "session_id": "sess-http-overwrite",
             "workspace_root": str(self.workspace),
@@ -112,11 +112,11 @@ class ArtifactHubFastAPITests(unittest.TestCase):
 
         self.assertEqual(second["share_id"], first["share_id"])
         self.assertEqual(second["artifact_version_id"], first["artifact_version_id"])
-        self.assertNotEqual(second["token"], first["token"])
+        self.assertEqual(second["token"], first["token"])
         self.assertIsNone(second["expires_at"])
         self.assertEqual(
             self.client.get("/api/public/shares/{}".format(first["token"])).status_code,
-            404,
+            200,
         )
         self.assertEqual(
             self.client.get("/api/public/shares/{}".format(second["token"])).status_code,

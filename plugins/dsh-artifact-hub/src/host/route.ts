@@ -2,12 +2,27 @@ import {
   CREATED_SHARES_RPC_ENDPOINT,
   LOCAL_SHARE_RPC_CHANNEL,
   LOCAL_SHARE_RPC_ENDPOINT,
+  WORKSPACE_FILES_RPC_ENDPOINT,
   type CreatedShare,
   type LocalShareRequest,
   type LocalShareResult,
   type LocalShareRpcResult,
+  type WorkspaceFilesRequest,
+  type WorkspaceFilesResult,
 } from '../contracts.ts'
 import { ArtifactHubClient, ArtifactHubRequestError } from './client.ts'
+import { createNasShare } from './nas.ts'
+import { listWorkspaceFiles, normalizeRelativePath } from './workspace-files.ts'
+
+/** Artifact byte path selected by the trusted Host configuration. */
+export type ShareStorage = {
+  readonly mode: 'local'
+} | {
+  readonly mode: 'nas'
+  readonly artifactRoot: string
+}
+
+const LOCAL_STORAGE: ShareStorage = { mode: 'local' }
 
 /** RPC registration contract exposed by the DSH Host connection. */
 export interface HostConnectionRpc {
@@ -39,26 +54,40 @@ export interface HostWorkspaceRegistry {
   }[]
 }
 
-/** Register the browser-facing Local-share RPC channel. */
+/** Register the browser-facing share RPC channel for the configured storage mode. */
+export function registerShareRoute(
+  rpc: HostConnectionRpc,
+  client: ArtifactHubClient,
+  sessions: HostSessionStore,
+  workspaces: HostWorkspaceRegistry,
+  storage: ShareStorage,
+): () => Promise<void> {
+  return rpc.handle(
+    LOCAL_SHARE_RPC_CHANNEL,
+    (endpoint, payload, signal) => {
+      if (endpoint === LOCAL_SHARE_RPC_ENDPOINT) {
+        return handleShareRequest(payload, client, sessions, workspaces, storage, signal)
+      }
+      if (endpoint === CREATED_SHARES_RPC_ENDPOINT) {
+        return handleCreatedSharesRequest(client, signal)
+      }
+      if (endpoint === WORKSPACE_FILES_RPC_ENDPOINT) {
+        return handleWorkspaceFilesRequest(payload, sessions, signal)
+      }
+      return Promise.resolve(failure('bad-request', `Unknown Artifact Hub endpoint: ${endpoint}`))
+    },
+    { authority: 'loopback' },
+  )
+}
+
+/** Backwards-compatible registration helper for callers pinned to Local mode. */
 export function registerLocalShareRoute(
   rpc: HostConnectionRpc,
   client: ArtifactHubClient,
   sessions: HostSessionStore,
   workspaces: HostWorkspaceRegistry,
 ): () => Promise<void> {
-  return rpc.handle(
-    LOCAL_SHARE_RPC_CHANNEL,
-    (endpoint, payload, signal) => {
-      if (endpoint === LOCAL_SHARE_RPC_ENDPOINT) {
-        return handleLocalShareRequest(payload, client, sessions, workspaces, signal)
-      }
-      if (endpoint === CREATED_SHARES_RPC_ENDPOINT) {
-        return handleCreatedSharesRequest(client, signal)
-      }
-      return Promise.resolve(failure('bad-request', `Unknown Artifact Hub endpoint: ${endpoint}`))
-    },
-    { authority: 'loopback' },
-  )
+  return registerShareRoute(rpc, client, sessions, workspaces, LOCAL_STORAGE)
 }
 
 /** List Shares through the same trusted Host identity used for creation. */
@@ -76,12 +105,43 @@ export async function handleCreatedSharesRequest(
   }
 }
 
-/** Validate one browser request and proxy it to Artifact Hub. */
-export async function handleLocalShareRequest(
+/** List trusted files for the in-conversation workspace picker. */
+export async function handleWorkspaceFilesRequest(
+  payload: unknown,
+  sessions: HostSessionStore,
+  signal?: AbortSignal,
+): Promise<LocalShareRpcResult<WorkspaceFilesResult>> {
+  try {
+    const input = parseWorkspaceFilesRequest(payload)
+    const workspaceRoot = sessions.get(input.sessionId)?.header.cwd
+    if (workspaceRoot === undefined || workspaceRoot === '') {
+      throw new LocalShareRouteError(
+        'session-not-found',
+        'Session workspace is unavailable',
+        { sessionId: input.sessionId },
+      )
+    }
+    return {
+      ok: true,
+      value: await listWorkspaceFiles(workspaceRoot, input.directory, signal),
+    }
+  } catch (error: unknown) {
+    if (error instanceof LocalShareRouteError) {
+      return failure(error.code, error.message, error.details)
+    }
+    // Do not echo filesystem errors: Node includes the absolute workspace path
+    // in several messages, while the browser only needs a retryable status.
+    return failure('bad-request', 'Workspace directory is unavailable')
+  }
+}
+
+/** Validate one browser request and publish it through the configured storage mode. */
+export async function handleShareRequest(
   payload: unknown,
   client: ArtifactHubClient,
   sessions: HostSessionStore,
   workspaces: HostWorkspaceRegistry,
+  storage: ShareStorage,
   signal?: AbortSignal,
 ): Promise<LocalShareRpcResult<LocalShareResult>> {
   try {
@@ -98,20 +158,20 @@ export async function handleLocalShareRequest(
     const workspace = registeredWorkspaces.find(candidate =>
       candidate.sessionIds.some(sessionId => String(sessionId) === input.sessionId),
     )
-    const result = await client.createLocalShare(
-      {
-        ...input,
-        workspaceRoot,
-        dshWorkspacePath: workspace?.path ?? workspaceRoot,
-        ...(workspace === undefined
-          ? {}
-          : {
-              dshWorkspaceId: String(workspace.id),
-              dshWorkspaceTitle: workspace.title,
-            }),
-      },
-      signal,
-    )
+    const request = {
+      ...input,
+      workspaceRoot,
+      dshWorkspacePath: workspace?.path ?? workspaceRoot,
+      ...(workspace === undefined
+        ? {}
+        : {
+            dshWorkspaceId: String(workspace.id),
+            dshWorkspaceTitle: workspace.title,
+          }),
+    }
+    const result = storage.mode === 'nas'
+      ? await createNasShare(client, request, storage.artifactRoot, signal)
+      : await client.createLocalShare(request, signal)
     return { ok: true, value: result }
   } catch (error: unknown) {
     if (error instanceof LocalShareRouteError) {
@@ -122,6 +182,17 @@ export async function handleLocalShareRequest(
     }
     return failure('bad-request', messageOf(error))
   }
+}
+
+/** Backwards-compatible request helper for tests and Local-only integrations. */
+export async function handleLocalShareRequest(
+  payload: unknown,
+  client: ArtifactHubClient,
+  sessions: HostSessionStore,
+  workspaces: HostWorkspaceRegistry,
+  signal?: AbortSignal,
+): Promise<LocalShareRpcResult<LocalShareResult>> {
+  return handleShareRequest(payload, client, sessions, workspaces, LOCAL_STORAGE, signal)
 }
 
 class LocalShareRouteError extends Error {
@@ -155,6 +226,21 @@ function parseRequest(value: unknown): LocalShareRequest {
     sourcePath,
     ...(expiresAt === undefined ? {} : { expiresAt }),
     ...(artifactId === undefined ? {} : { artifactId }),
+  }
+}
+
+function parseWorkspaceFilesRequest(value: unknown): WorkspaceFilesRequest {
+  if (!isRecord(value)) throw new Error('Request body must be an object')
+  const sessionId = nonBlank(value.sessionId, 'sessionId')
+  if (value.directory !== undefined && typeof value.directory !== 'string') {
+    throw new Error('directory must be a string')
+  }
+  const directory = value.directory === undefined
+    ? undefined
+    : normalizeRelativePath(value.directory, 'directory')
+  return {
+    sessionId,
+    ...(directory === undefined ? {} : { directory }),
   }
 }
 

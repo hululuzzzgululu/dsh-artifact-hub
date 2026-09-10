@@ -1,0 +1,38 @@
+# Artifact Hub systemd unit.
+# Adjust WorkingDirectory to where the repo lives on the Hub host, and the
+# Environment= lines to your deployment (see docs/deployment.md §1).
+# Install to /etc/systemd/system/ and run:
+#   systemctl daemon-reload && systemctl enable --now artifact-hub
+
+[Unit]
+Description=Artifact Hub backend for DeepSeek Harness
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=artifact-hub
+Group=artifact-hub
+WorkingDirectory=/opt/dsh-artifact-hub/hub
+Environment=HUB_HOST=127.0.0.1
+Environment=HUB_PORT=8000
+# Public origin share links are built from — set to your real domain.
+Environment=HUB_BASE_URL=https://share.example.com
+# Loopback only: management APIs must not be internet-facing. Nginx proxies
+# /api/public/shares/* to this port.
+Environment=HUB_STORAGE_MODE=sqlite
+Environment=HUB_DATABASE_PATH=/var/lib/dsh-artifact-hub/hub.sqlite3
+Environment=HUB_ARTIFACT_ROOT=/var/lib/dsh-artifact-hub/artifacts
+ExecStart=/usr/local/bin/uv run python -m api.main
+Restart=on-failure
+RestartSec=3
+
+# Hardening — relax if your layout needs it.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/dsh-artifact-hub
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

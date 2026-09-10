@@ -1,13 +1,19 @@
 import type { Context } from '@deepseek-ai/cordis'
+import { ArtifactShareAction, type ArtifactShareActionProps } from './ArtifactShareAction.tsx'
 import { ArtifactHubWorkspace, type ArtifactHubWorkspaceProps } from './ArtifactHubWorkspace.tsx'
 import { ArtifactFiles, type ArtifactFilesProps } from './ArtifactFiles.tsx'
-import { requestCreatedShares, requestLocalShare, type ClientConnectionRpc } from './api.ts'
+import {
+  requestCreatedShares,
+  requestLocalShare,
+  requestWorkspaceFiles,
+  type ClientConnectionRpc,
+} from './api.ts'
 import { producedFiles, type TurnTailOwner } from './deliverables.ts'
 import { en, NS, zh, type ArtifactHubTranslate } from './locales.ts'
 import { mountArtifactHubSidebarEntry } from './sidebar-entry.ts'
 import { ArtifactHubWorkspaceController } from './workspace-controller.ts'
 
-export { requestCreatedShares, requestLocalShare } from './api.ts'
+export { requestCreatedShares, requestLocalShare, requestWorkspaceFiles } from './api.ts'
 export { ArtifactHubWorkspace } from './ArtifactHubWorkspace.tsx'
 export { ArtifactFiles } from './ArtifactFiles.tsx'
 export { producedFiles } from './deliverables.ts'
@@ -48,6 +54,16 @@ interface ClientContext extends Context {
       },
       component: (props: ArtifactHubWorkspaceProps) => React.ReactNode,
     ): unknown
+    register(
+      options: {
+        readonly name: 'conversation.chat.assistant-actions'
+        readonly id: string
+        readonly order?: number
+        readonly locale?: string
+        readonly inject: () => Pick<ArtifactShareActionProps, 'requestShare' | 'requestShares' | 'requestWorkspaceFiles' | 't'>
+      },
+      component: (props: ArtifactShareActionProps) => React.ReactNode,
+    ): unknown
   }
 }
 
@@ -57,6 +73,8 @@ export function apply(ctx: Context): void {
   const requestShare = (request: Parameters<typeof requestLocalShare>[0], signal?: AbortSignal) =>
     requestLocalShare(request, client.connection.rpc, signal)
   const requestShares = (signal?: AbortSignal) => requestCreatedShares(client.connection.rpc, signal)
+  const requestWorkspaceFilesThroughHost = (request: Parameters<typeof requestWorkspaceFiles>[0], signal?: AbortSignal) =>
+    requestWorkspaceFiles(request, client.connection.rpc, signal)
   const controller = new ArtifactHubWorkspaceController()
   const t = client.locale.bind(NS)
   ctx.effect(() => client.locale.register(NS, { zh, en }), 'artifact-hub: browser dictionaries')
@@ -65,7 +83,20 @@ export function apply(ctx: Context): void {
     priority: -10,
     locale: NS,
     select: producedFiles,
-  }, props => <ArtifactFiles {...props} requestShare={requestShare} />))
+  }, props => <ArtifactFiles {...props} requestShare={requestShare} requestShares={requestShares} />))
+  client.slots.inject('conversation.chat.assistant-actions', () => client.slots.register({
+    name: 'conversation.chat.assistant-actions',
+    id: 'artifact-hub-share-files',
+    // Keep file sharing after the built-in feedback, memory, and branch actions.
+    order: 1000,
+    locale: NS,
+    inject: () => ({
+      requestShare,
+      requestShares,
+      requestWorkspaceFiles: requestWorkspaceFilesThroughHost,
+      t,
+    }),
+  }, ArtifactShareAction))
   client.slots.inject('shell.overlay', () => client.slots.register({
     name: 'shell.overlay',
     id: 'artifact-hub-share-center',

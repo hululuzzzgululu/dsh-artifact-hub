@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { requestCreatedShares, requestLocalShare } from '../src/client/api.ts'
+import { requestCreatedShares, requestLocalShare, requestWorkspaceFiles } from '../src/client/api.ts'
 import {
   artifactHubWorkspaceStyles,
   filterArtifactGroups,
@@ -8,7 +8,9 @@ import {
 } from '../src/client/ArtifactHubWorkspace.tsx'
 import type { CreatedShare } from '../src/contracts.ts'
 import { artifactFilesStyles, sessionRelativePath } from '../src/client/ArtifactFiles.tsx'
+import { matchCreatedShare, toDatetimeLocalValue } from '../src/client/shareLookup.ts'
 import { producedFiles } from '../src/client/deliverables.ts'
+import { producedPathsForMessage } from '../src/client/ArtifactShareAction.tsx'
 import { en, zh } from '../src/client/locales.ts'
 import { ArtifactHubWorkspaceController } from '../src/client/workspace-controller.ts'
 
@@ -48,10 +50,12 @@ describe('requestCreatedShares', () => {
   it('loads the trusted creator list through a payload-free endpoint', async () => {
     const shares = [{
       shareId: 'share-1', artifactId: 'artifact-1', artifactVersionId: 'version-1',
-      version: 1, name: 'report.md', mimeType: 'text/markdown', size: 42,
+      version: 1, name: 'report.md', sourceSessionId: 'sess-1', sourcePath: 'report.md',
+      mimeType: 'text/markdown', size: 42,
       visibility: 'LINK' as const, permission: 'VIEW_DOWNLOAD' as const,
       createdAt: '2026-09-07T10:00:00Z', expiresAt: null, revokedAt: null,
       previewUrl: 'https://share.example/s/preview.ticket',
+      shareUrl: 'https://share.example/s/token',
     }]
     const call = vi.fn(async () => ({ ok: true as const, value: shares }))
 
@@ -65,28 +69,129 @@ describe('requestCreatedShares', () => {
       value: [{ shareId: 'share-1', storageKey: '/private/path' }],
     }) })).rejects.toThrow('invalid created-share list')
   })
+
+  it('rejects a share record without source fields', async () => {
+    await expect(requestCreatedShares({ call: async () => ({
+      ok: true,
+      value: [{
+        shareId: 'share-1', artifactId: 'artifact-1', artifactVersionId: 'version-1',
+        version: 1, name: 'report.md', mimeType: 'text/markdown', size: 42,
+        visibility: 'LINK', permission: 'VIEW_DOWNLOAD',
+        createdAt: '2026-09-07T10:00:00Z', expiresAt: null, revokedAt: null,
+        previewUrl: null,
+      }],
+    }) })).rejects.toThrow('invalid created-share list')
+  })
+})
+
+describe('requestWorkspaceFiles', () => {
+  it('calls the trusted Host workspace listing endpoint', async () => {
+    const listing = {
+      directory: 'reports',
+      entries: [{ name: 'report.md', path: 'reports/report.md', kind: 'file' as const, size: 42 }],
+      truncated: false,
+    }
+    const signal = new AbortController().signal
+    const call = vi.fn(async () => ({ ok: true as const, value: listing }))
+
+    await expect(requestWorkspaceFiles({ sessionId: 'sess-1', directory: 'reports' }, { call }, signal))
+      .resolves.toEqual(listing)
+    expect(call).toHaveBeenCalledWith('/artifact-hub', 'workspace-files', {
+      sessionId: 'sess-1', directory: 'reports',
+    }, signal)
+  })
+
+  it('rejects malformed Host listings before they reach the picker', async () => {
+    await expect(requestWorkspaceFiles({ sessionId: 'sess-1' }, { call: async () => ({
+      ok: true,
+      value: { directory: '', entries: [{ name: 'secret', path: '/etc/passwd', kind: 'file' }], truncated: false },
+    }) })).rejects.toThrow('invalid workspace file list')
+  })
+})
+
+describe('matchCreatedShare', () => {
+  const share = (overrides: Partial<CreatedShare>): CreatedShare => ({
+    shareId: 'share-1', artifactId: 'artifact-1', artifactVersionId: 'version-1',
+    version: 1, name: 'report.md', sourceSessionId: 'sess-1', sourcePath: 'report.md',
+    mimeType: 'text/markdown', size: 42,
+    visibility: 'LINK', permission: 'VIEW_DOWNLOAD',
+    createdAt: '2026-09-07T10:00:00Z', expiresAt: null, revokedAt: null,
+    previewUrl: null,
+    shareUrl: null,
+    ...overrides,
+  })
+
+  it('matches the current session and source path', () => {
+    const existing = share({})
+    expect(matchCreatedShare([existing], 'sess-1', 'report.md')).toBe(existing)
+    expect(matchCreatedShare([existing], 'sess-2', 'report.md')).toBeNull()
+    expect(matchCreatedShare([existing], 'sess-1', 'other.md')).toBeNull()
+  })
+
+  it('normalizes Windows and POSIX separators on both sides', () => {
+    const existing = share({ sourcePath: 'reports\\report.md' })
+    expect(matchCreatedShare([existing], 'sess-1', 'reports/report.md')).toBe(existing)
+    const posixStored = share({ sourcePath: 'reports/report.md' })
+    expect(matchCreatedShare([posixStored], 'sess-1', 'reports\\report.md')).toBe(posixStored)
+  })
+
+  it('ignores revoked shares but keeps expired ones', () => {
+    const revoked = share({ shareId: 'share-revoked', revokedAt: '2026-09-07T12:00:00Z' })
+    expect(matchCreatedShare([revoked], 'sess-1', 'report.md')).toBeNull()
+    const expired = share({ shareId: 'share-expired', expiresAt: '2000-01-01T00:00:00Z' })
+    expect(matchCreatedShare([expired], 'sess-1', 'report.md')).toBe(expired)
+  })
+
+  it('prefers the highest matching version as a defensive tie-break', () => {
+    const v1 = share({ shareId: 'share-v1', version: 1 })
+    const v2 = share({ shareId: 'share-v2', version: 2 })
+    expect(matchCreatedShare([v1, v2], 'sess-1', 'report.md')?.shareId).toBe('share-v2')
+  })
+
+  it('returns null when nothing matches', () => {
+    expect(matchCreatedShare([], 'sess-1', 'report.md')).toBeNull()
+  })
+})
+
+describe('toDatetimeLocalValue', () => {
+  it('renders an ISO timestamp as a local datetime-local value', () => {
+    const date = new Date(2026, 8, 8, 9, 5)
+    const expected = '2026-09-08T09:05'
+    expect(toDatetimeLocalValue(date.toISOString())).toBe(expected)
+  })
+
+  it('returns an empty string for null and invalid input', () => {
+    expect(toDatetimeLocalValue(null)).toBe('')
+    expect(toDatetimeLocalValue('not-a-timestamp')).toBe('')
+  })
 })
 
 describe('Share Center grouping and filtering', () => {
   const shares: readonly CreatedShare[] = [
     {
       shareId: 'share-new', artifactId: 'artifact-a', artifactVersionId: 'version-a2',
-      version: 2, name: 'report.md', mimeType: 'text/markdown', size: 84,
+      version: 2, name: 'report.md', sourceSessionId: 'sess-a', sourcePath: 'report.md',
+      mimeType: 'text/markdown', size: 84,
       visibility: 'LINK', permission: 'VIEW_DOWNLOAD', createdAt: '2026-09-07T11:00:00Z',
       expiresAt: '2099-01-01T00:00:00Z', revokedAt: null,
       previewUrl: 'https://share.example/s/preview.new',
+      shareUrl: 'https://share.example/s/token.new',
     },
     {
       shareId: 'share-old', artifactId: 'artifact-a', artifactVersionId: 'version-a1',
-      version: 1, name: 'report.md', mimeType: 'text/markdown', size: 42,
+      version: 1, name: 'report.md', sourceSessionId: 'sess-a', sourcePath: 'report.md',
+      mimeType: 'text/markdown', size: 42,
       visibility: 'LINK', permission: 'VIEW_DOWNLOAD', createdAt: '2026-09-07T10:00:00Z',
       expiresAt: '2000-01-01T00:00:00Z', revokedAt: null, previewUrl: null,
+      shareUrl: 'https://share.example/s/token.old',
     },
     {
       shareId: 'share-same-name', artifactId: 'artifact-b', artifactVersionId: 'version-b1',
-      version: 1, name: 'report.md', mimeType: 'text/markdown', size: 21,
+      version: 1, name: 'report.md', sourceSessionId: 'sess-b', sourcePath: 'report.md',
+      mimeType: 'text/markdown', size: 21,
       visibility: 'LINK', permission: 'VIEW_DOWNLOAD', createdAt: '2026-09-07T09:00:00Z',
       expiresAt: null, revokedAt: null, previewUrl: 'https://share.example/s/preview.other',
+      shareUrl: 'https://share.example/s/token.other',
     },
   ]
 
@@ -149,6 +254,25 @@ describe('producedFiles', () => {
   })
 })
 
+describe('producedPathsForMessage', () => {
+  it('finds the finalized message turn and prioritizes settled files', () => {
+    const turn = { data: { get: () => ({ produced: [
+      { seq: 4, path: 'report.md' },
+      { seq: 3, path: 'data.csv' },
+      { seq: 5, path: 'late.md' },
+      { seq: 4, path: 'report.md' },
+    ] }) } }
+    const snapshot = {
+      nodes: { values: () => [{
+        data: { finalNode: { messageId: 'msg-1', seq: 4 } },
+        location: { kind: 'turn', turn },
+      }] },
+    }
+    expect(producedPathsForMessage(snapshot, 'msg-1')).toEqual(['report.md', 'data.csv'])
+    expect(producedPathsForMessage(snapshot, 'msg-missing')).toEqual([])
+  })
+})
+
 describe('sessionRelativePath', () => {
   it('keeps safe relative paths and removes dot segments', () => {
     expect(sessionRelativePath('./reports/report.md')).toBe('reports/report.md')
@@ -201,6 +325,8 @@ describe('ArtifactFiles theme', () => {
 
 describe('Share Center product copy', () => {
   it('uses file terminology instead of exposing Artifact terminology', () => {
+    expect(zh['picker.title']).toBe('选择分享的文件')
+    expect(zh['picker.produced']).toBe('本对话产出的文件')
     expect(zh['center.subtitle']).toBe('按文件汇总各版本当前的分享')
     expect(zh['center.results']).toBe('{files} 个文件 · {shares} 条分享')
     expect(en['center.subtitle']).toBe('Files are grouped with each version’s current share.')

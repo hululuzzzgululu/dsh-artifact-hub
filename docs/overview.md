@@ -187,7 +187,7 @@ ArtifactVersion
  Share
 ```
 
-每个 ArtifactVersion 最多对应一个当前 Share。再次分享同一版本会覆盖该 Share 的链接和配置，而不是新增一条点击历史。
+每个 ArtifactVersion 最多对应一个当前 Share。再次分享同一版本是幂等更新：复用原链接（token），仅更新有效期，而不是新增一条点击历史；只有原 Share 已被撤销时才换新链接。
 
 而不是：
 
@@ -279,12 +279,13 @@ created_at
 storage_mode = LOCAL | NAS
 ```
 
-`storage_key` 使用相对路径，不保存实际机器绝对路径。
+`storage_key` 使用相对路径，不保存实际机器绝对路径。路径的第一段是
+`created_by_id`，因此不同 DSH Host 的 Artifact 会隔离在各自的用户目录下。
 
 例如：
 
 ```
-artifacts/550e8400-e29b-41d4-a716-446655440000/v1/
+user-001/artifacts/550e8400-e29b-41d4-a716-446655440000/v1/report.html
 ```
 
 ---
@@ -298,6 +299,7 @@ id
 artifact_version_id
 
 token_hash
+token
 
 UNIQUE(artifact_version_id)
 
@@ -613,7 +615,7 @@ Local Artifact Storage
              │ Hub snapshot
              ▼
 
-/data/artifacts/550e8400-e29b-41d4-a716-446655440000/v1/report.html
+/data/artifacts/user-001/artifacts/550e8400-e29b-41d4-a716-446655440000/v1/report.html
 ```
 
 ---
@@ -813,7 +815,7 @@ Hub：
   "artifact_id": "550e8400-e29b-41d4-a716-446655440000",
   "version": 1,
   "upload_id": "550e8400-e29b-41d4-a716-446655440001",
-  "storage_key": "artifacts/550e8400-e29b-41d4-a716-446655440000/v1/"
+  "storage_key": "user-001/artifacts/550e8400-e29b-41d4-a716-446655440000/v1/report.html"
 }
 ```
 
@@ -832,7 +834,7 @@ source:
 copy：
 
 ```
-/mnt/nas/artifacts/550e8400-e29b-41d4-a716-446655440000/v1/report.html
+/mnt/nas/artifacts/user-001/artifacts/550e8400-e29b-41d4-a716-446655440000/v1/report.html
 ```
 
 ---
@@ -900,31 +902,33 @@ Share
 
 # 17. Storage Path
 
-建议物理目录：
+建议物理目录（`artifact_root` 是配置的根目录）：
 
 ```
-artifacts/
-└── {artifact_id}/
-    └── v{version}/
-        └── content
+{user_id}/
+└── artifacts/
+    └── {artifact_id}/
+        └── v{version}/
+            └── content
 ```
 
 例如：
 
 ```
-artifacts/
-└── 550e8400-e29b-41d4-a716-446655440000/
-    ├── v1/
-    │   └── report.html
-    └── v2/
-        └── report.html
+user-001/
+└── artifacts/
+    └── 550e8400-e29b-41d4-a716-446655440000/
+        ├── v1/
+        │   └── report.html
+        └── v2/
+            └── report.html
 ```
 
 数据库保存：
 
 ```
 storage_key =
-550e8400-e29b-41d4-a716-446655440000/v1/
+user-001/artifacts/550e8400-e29b-41d4-a716-446655440000/v1/report.html
 ```
 
 不要保存：
@@ -1059,6 +1063,7 @@ share_id
 artifact_version_id
 
 token_hash
+token
 
 UNIQUE(artifact_version_id)
 
@@ -1141,7 +1146,8 @@ checksum == current checksum
 
 ```
 复用 ArtifactVersion
-创建或覆盖该 ArtifactVersion 唯一的 Share
+幂等更新该 ArtifactVersion 唯一的 Share
+（复用 token，仅更新有效期；已撤销时换新 token）
 ```
 
 否则：
@@ -1203,7 +1209,7 @@ POST /api/shares/prepare
   "artifact_id": "550e8400-e29b-41d4-a716-446655440000",
   "version": 1,
   "upload_id": "550e8400-e29b-41d4-a716-446655440001",
-  "storage_key": "550e8400-e29b-41d4-a716-446655440000/v1/"
+  "storage_key": "user-001/artifacts/550e8400-e29b-41d4-a716-446655440000/v1/report.html"
 }
 ```
 

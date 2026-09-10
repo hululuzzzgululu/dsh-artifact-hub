@@ -17,6 +17,8 @@ class ShareInfo(DomainModel):
     artifact_version_id: str
     version: int
     name: str
+    source_session_id: str
+    source_path: str
     mime_type: str
     storage_mode: str
     storage_key: str
@@ -30,6 +32,7 @@ class ShareInfo(DomainModel):
     revoked_at: Optional[str]
     created_at: str
     url: Optional[str]
+    share_url: Optional[str]
 
     def to_dict(self):
         return self.model_dump()

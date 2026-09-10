@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from artifact_hub.domain.errors import HubError
+from artifact_hub.domain.errors import HubError, ShareRevokedError
 from artifact_hub.repositories.sqlite import SqliteArtifactRepository
 from artifact_hub.services.artifact_hub import ArtifactHub
 
@@ -65,6 +65,15 @@ class ArtifactHubServiceTests(unittest.TestCase):
         self.assertEqual(artifact["dsh_workspace_path"], str(self.workspace.resolve()))
         self.assertEqual(artifact["dsh_workspace_title"], "Project One")
         self.assertEqual(artifact["created_by_name"], "User One")
+        snapshot = (
+            self.artifacts
+            / "user-1"
+            / "artifacts"
+            / result.artifact_id
+            / "v1"
+            / "report.html"
+        )
+        self.assertEqual(snapshot.read_text(encoding="utf-8"), "first version")
 
         source.write_text("changed later", encoding="utf-8")
         content = self.hub.read_share_content(result.token)
@@ -84,6 +93,20 @@ class ArtifactHubServiceTests(unittest.TestCase):
                 source_path="../../outside.txt",
                 created_by_id="user-1",
             )
+
+    def test_creator_id_must_be_safe_for_storage_path(self):
+        source = self.workspace / "report.txt"
+        source.write_text("content", encoding="utf-8")
+
+        for created_by_id in ("../escape", "nested/user", r"nested\\user"):
+            with self.subTest(created_by_id=created_by_id):
+                with self.assertRaises(HubError):
+                    self.hub.create_local_share(
+                        session_id="sess-safe-id",
+                        workspace_root=self.workspace,
+                        source_path="report.txt",
+                        created_by_id=created_by_id,
+                    )
 
     def test_same_artifact_can_publish_a_new_version_without_changing_v1(self):
         source = self.workspace / "report.txt"
@@ -129,9 +152,10 @@ class ArtifactHubServiceTests(unittest.TestCase):
         self.assertEqual(second.artifact_version_id, first.artifact_version_id)
         self.assertEqual(second.version, first.version)
         self.assertEqual(second.share_id, first.share_id)
-        self.assertNotEqual(second.token, first.token)
-        with self.assertRaises(HubError):
-            self.hub.resolve_share(first.token)
+        self.assertEqual(second.token, first.token)
+        self.assertEqual(second.url, first.url)
+        self.assertEqual(second.created_at, first.created_at)
+        self.assertEqual(self.hub.resolve_share(first.token).share_id, first.share_id)
         self.assertEqual(self.hub.resolve_share(second.token).share_id, first.share_id)
         self.assertEqual(
             len(self.hub.list_created_shares(created_by_id="user-stable")),
@@ -149,12 +173,145 @@ class ArtifactHubServiceTests(unittest.TestCase):
         self.assertEqual(third.artifact_id, first.artifact_id)
         self.assertEqual(third.version, 2)
         self.assertNotEqual(third.artifact_version_id, first.artifact_version_id)
+        self.assertNotEqual(third.token, second.token)
         self.assertEqual(self.hub.read_share_content(second.token).body, b"same content")
         self.assertEqual(self.hub.read_share_content(third.token).body, b"changed content")
         self.assertEqual(
             len(self.hub.list_created_shares(created_by_id="user-stable")),
             2,
         )
+
+    def test_reshare_with_new_expiry_keeps_token_and_updates_expiry(self):
+        source = self.workspace / "renewal.txt"
+        source.write_text("renewal content", encoding="utf-8")
+
+        first = self.hub.create_local_share(
+            session_id="sess-renewal",
+            workspace_root=self.workspace,
+            source_path="renewal.txt",
+            created_by_id="user-renewal",
+        )
+        self.assertIsNone(first.expires_at)
+
+        second = self.hub.create_local_share(
+            session_id="sess-renewal",
+            workspace_root=self.workspace,
+            source_path="renewal.txt",
+            created_by_id="user-renewal",
+            expires_at="2099-01-01T00:00:00+00:00",
+        )
+
+        self.assertEqual(second.token, first.token)
+        self.assertEqual(second.share_id, first.share_id)
+        self.assertEqual(second.expires_at, "2099-01-01T00:00:00+00:00")
+        self.assertEqual(self.hub.resolve_share(first.token).share_id, first.share_id)
+        row = self.hub.repository.get_share_by_version_id(first.artifact_version_id)
+        self.assertEqual(row["token"], first.token)
+        self.assertEqual(row["expires_at"], "2099-01-01T00:00:00+00:00")
+
+    def test_reshare_after_revocation_rotates_token(self):
+        source = self.workspace / "revoked.txt"
+        source.write_text("revocation content", encoding="utf-8")
+
+        first = self.hub.create_local_share(
+            session_id="sess-revoked",
+            workspace_root=self.workspace,
+            source_path="revoked.txt",
+            created_by_id="user-revoked",
+        )
+        self.hub.revoke_share(first.token, revoked_by_id="user-revoked")
+        with self.assertRaises(ShareRevokedError):
+            self.hub.resolve_share(first.token)
+
+        second = self.hub.create_local_share(
+            session_id="sess-revoked",
+            workspace_root=self.workspace,
+            source_path="revoked.txt",
+            created_by_id="user-revoked",
+        )
+
+        self.assertEqual(second.share_id, first.share_id)
+        self.assertNotEqual(second.token, first.token)
+        # The rotated hash means the revoked link is gone entirely.
+        with self.assertRaises(HubError):
+            self.hub.resolve_share(first.token)
+        self.assertEqual(self.hub.resolve_share(second.token).share_id, first.share_id)
+        row = self.hub.repository.get_share_by_version_id(first.artifact_version_id)
+        self.assertIsNone(row["revoked_at"])
+
+    def test_reshare_of_expired_share_renews_same_token(self):
+        source = self.workspace / "expired.txt"
+        source.write_text("expired content", encoding="utf-8")
+
+        first = self.hub.create_local_share(
+            session_id="sess-expired",
+            workspace_root=self.workspace,
+            source_path="expired.txt",
+            created_by_id="user-expired",
+            expires_at="2000-01-01T00:00:00+00:00",
+        )
+        with self.assertRaises(HubError):
+            self.hub.resolve_share(first.token)
+
+        second = self.hub.create_local_share(
+            session_id="sess-expired",
+            workspace_root=self.workspace,
+            source_path="expired.txt",
+            created_by_id="user-expired",
+            expires_at="2099-01-01T00:00:00+00:00",
+        )
+
+        self.assertEqual(second.token, first.token)
+        self.assertEqual(self.hub.resolve_share(second.token).share_id, first.share_id)
+
+    def test_reshare_of_legacy_row_without_token_mints_then_reuses(self):
+        source = self.workspace / "legacy.txt"
+        source.write_text("legacy content", encoding="utf-8")
+
+        first = self.hub.create_local_share(
+            session_id="sess-legacy",
+            workspace_root=self.workspace,
+            source_path="legacy.txt",
+            created_by_id="user-legacy",
+        )
+        # Simulate a pre-migration row: hash only, no stored raw token.
+        self.hub.repository.upsert_share(
+            {
+                "share_id": first.share_id,
+                "artifact_version_id": first.artifact_version_id,
+                "token_hash": hashlib.sha256(first.token.encode("utf-8")).hexdigest(),
+                "token": None,
+                "visibility": "LINK",
+                "permission": "VIEW_DOWNLOAD",
+                "expires_at": None,
+                "revoked_at": None,
+                "created_by_id": "user-legacy",
+                "created_by_name": "user-legacy",
+                "created_at": first.created_at,
+                "updated_at": first.created_at,
+            }
+        )
+        row = self.hub.repository.get_share_by_version_id(first.artifact_version_id)
+        self.assertIsNone(row["token"])
+
+        second = self.hub.create_local_share(
+            session_id="sess-legacy",
+            workspace_root=self.workspace,
+            source_path="legacy.txt",
+            created_by_id="user-legacy",
+        )
+        third = self.hub.create_local_share(
+            session_id="sess-legacy",
+            workspace_root=self.workspace,
+            source_path="legacy.txt",
+            created_by_id="user-legacy",
+        )
+
+        self.assertNotEqual(second.token, first.token)
+        self.assertEqual(second.share_id, first.share_id)
+        self.assertEqual(third.token, second.token)
+        row = self.hub.repository.get_share_by_version_id(first.artifact_version_id)
+        self.assertEqual(row["token"], second.token)
 
     def test_unchanged_explicit_artifact_reuses_latest_version(self):
         source = self.workspace / "explicit.txt"
@@ -186,7 +343,10 @@ class ArtifactHubServiceTests(unittest.TestCase):
 
         self.assertEqual(prepared.version, 1)
         self.assertEqual(str(uuid.UUID(prepared.upload_id)), prepared.upload_id)
-        self.assertEqual(prepared.storage_key, "artifacts/{}/v1/report.csv".format(prepared.artifact_id))
+        self.assertEqual(
+            prepared.storage_key,
+            "user-2/artifacts/{}/v1/report.csv".format(prepared.artifact_id),
+        )
         target = Path(prepared.target_path)
         target.parent.mkdir(parents=True)
         target.write_text("a,b\n1,2\n", encoding="utf-8")
@@ -276,7 +436,14 @@ class ArtifactHubServiceTests(unittest.TestCase):
         listed = self.hub.list_created_shares(created_by_id="user-5")
         self.assertEqual(len(listed), 1)
         self.assertEqual(listed[0].share_id, result.share_id)
+        self.assertEqual(listed[0].source_session_id, "sess-5")
+        self.assertEqual(listed[0].source_path, "report.txt")
         self.assertTrue(listed[0].url.startswith("https://share.example.test/s/preview."))
+        # The creator-facing durable link is rebuilt from the stored token.
+        self.assertEqual(
+            listed[0].share_url,
+            "https://share.example.test/s/{}".format(result.token),
+        )
         preview_token = listed[0].url.rsplit("/", 1)[-1]
         self.assertEqual(self.hub.resolve_share(preview_token).share_id, result.share_id)
 
@@ -286,6 +453,11 @@ class ArtifactHubServiceTests(unittest.TestCase):
             self.hub.revoke_share(preview_token, revoked_by_id="user-5")
 
         self.assertEqual(self.hub.resolve_share(result.token).share_id, result.share_id)
+
+        self.hub.revoke_share(result.token, revoked_by_id="user-5")
+        revoked_listed = self.hub.list_created_shares(created_by_id="user-5")
+        self.assertEqual(revoked_listed[0].revoked_at is not None, True)
+        self.assertIsNone(revoked_listed[0].share_url)
 
 
 if __name__ == "__main__":

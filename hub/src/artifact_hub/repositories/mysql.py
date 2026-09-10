@@ -94,8 +94,7 @@ class MysqlArtifactRepository(ArtifactRepository):
                 created_by_name VARCHAR(128) NOT NULL COMMENT '该版本发布者的展示名称；取不到时与 created_by_id 相同',
                 created_at VARCHAR(64) NOT NULL COMMENT '创建时间（ISO-8601）',
                 UNIQUE KEY uk_dsh_artifact_versions_artifact_version_id (artifact_version_id),
-                UNIQUE KEY uk_dsh_artifact_versions_artifact_version (artifact_id, version),
-                CONSTRAINT fk_dsh_version_artifact FOREIGN KEY (artifact_id) REFERENCES dsh_artifacts (artifact_id)
+                UNIQUE KEY uk_dsh_artifact_versions_artifact_version (artifact_id, version)
             ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = 'Artifact 不可变版本快照'
             """,
             """
@@ -103,7 +102,8 @@ class MysqlArtifactRepository(ArtifactRepository):
                 id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '内部自增行主键，不对外暴露',
                 share_id CHAR(36) NOT NULL COMMENT '业务 ID（UUID v4）',
                 artifact_version_id CHAR(36) NOT NULL COMMENT '指向的 Artifact Version',
-                token_hash CHAR(64) NOT NULL COMMENT 'share token 的 SHA-256（hex），原始 token 不落库',
+                token_hash CHAR(64) NOT NULL COMMENT 'share token 的 SHA-256（hex），用于访问查找',
+                token VARCHAR(64) NULL COMMENT 'share token 原文，同版本幂等重发时复用同一链接（历史数据为 NULL，重发后回填）',
                 visibility VARCHAR(32) NOT NULL COMMENT '可见性：LINK（预留 PRIVATE）',
                 permission VARCHAR(32) NOT NULL COMMENT '权限：VIEW_DOWNLOAD（预留 VIEW_ONLY）',
                 expires_at VARCHAR(64) NULL COMMENT '过期时间（ISO-8601），NULL 表示永不过期',
@@ -115,8 +115,7 @@ class MysqlArtifactRepository(ArtifactRepository):
                 UNIQUE KEY uk_dsh_shares_share_id (share_id),
                 UNIQUE KEY uk_dsh_shares_token_hash (token_hash),
                 UNIQUE KEY uk_dsh_shares_artifact_version_id (artifact_version_id),
-                INDEX idx_dsh_shares_created_by (created_by_id, created_at),
-                CONSTRAINT fk_dsh_share_version FOREIGN KEY (artifact_version_id) REFERENCES dsh_artifact_versions (artifact_version_id)
+                INDEX idx_dsh_shares_created_by (created_by_id, created_at)
             ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '指向某个 Artifact Version 的访问分享'
             """,
             """
@@ -136,8 +135,7 @@ class MysqlArtifactRepository(ArtifactRepository):
                 created_at VARCHAR(64) NOT NULL COMMENT '创建时间（ISO-8601）',
                 state VARCHAR(32) NOT NULL COMMENT '状态：PREPARED|COMMITTED',
                 UNIQUE KEY uk_dsh_uploads_upload_id (upload_id),
-                INDEX idx_dsh_uploads_artifact_state (artifact_id, state),
-                CONSTRAINT fk_dsh_upload_artifact FOREIGN KEY (artifact_id) REFERENCES dsh_artifacts (artifact_id)
+                INDEX idx_dsh_uploads_artifact_state (artifact_id, state)
             ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = 'NAS 两阶段上传的预留记录（prepare/commit）'
             """,
         ]
@@ -219,9 +217,23 @@ class MysqlArtifactRepository(ArtifactRepository):
                 connection.execute(text(statement))
             for statement in statements:
                 connection.execute(text(statement))
+            for statement in self._share_token_migration_statements(columns_by_table):
+                connection.execute(text(statement))
             if migrate_share_uniqueness:
                 for statement in self._share_uniqueness_migration_statements():
                     connection.execute(text(statement))
+
+    @staticmethod
+    def _share_token_migration_statements(columns_by_table):
+        """Persist the raw share token so re-shares reuse the same link."""
+
+        columns = columns_by_table.get("dsh_shares")
+        if columns is None or "token" in columns:
+            return []
+        return [
+            "ALTER TABLE dsh_shares ADD COLUMN token VARCHAR(64) NULL "
+            "COMMENT 'share token 原文，同版本幂等重发时复用同一链接（历史数据为 NULL，重发后回填）'"
+        ]
 
     @staticmethod
     def _creator_workspace_migration_statements(columns_by_table, indexes_by_table):
@@ -368,25 +380,6 @@ class MysqlArtifactRepository(ArtifactRepository):
         ):
             if table_name in old:
                 statements.append(alterations[table_name])
-
-        if "dsh_artifact_versions" in old:
-            statements.append("""
-                ALTER TABLE dsh_artifact_versions
-                    ADD CONSTRAINT fk_dsh_version_artifact FOREIGN KEY (artifact_id)
-                        REFERENCES dsh_artifacts(artifact_id)
-            """)
-        if "dsh_shares" in old:
-            statements.append("""
-                ALTER TABLE dsh_shares
-                    ADD CONSTRAINT fk_dsh_share_version FOREIGN KEY (artifact_version_id)
-                        REFERENCES dsh_artifact_versions(artifact_version_id)
-            """)
-        if "dsh_uploads" in old:
-            statements.append("""
-                ALTER TABLE dsh_uploads
-                    ADD CONSTRAINT fk_dsh_upload_artifact FOREIGN KEY (artifact_id)
-                        REFERENCES dsh_artifacts(artifact_id)
-            """)
         return statements
 
     @staticmethod
@@ -511,21 +504,21 @@ class MysqlArtifactRepository(ArtifactRepository):
         self._execute(
             """
             INSERT INTO dsh_shares
-            (share_id, artifact_version_id, token_hash, visibility, permission,
+            (share_id, artifact_version_id, token_hash, token, visibility, permission,
              expires_at, revoked_at, created_by_id, created_by_name,
              created_at, updated_at)
-            VALUES (:share_id, :artifact_version_id, :token_hash, :visibility,
+            VALUES (:share_id, :artifact_version_id, :token_hash, :token, :visibility,
                     :permission, :expires_at, :revoked_at, :created_by_id,
                     :created_by_name, :created_at, :updated_at)
             ON DUPLICATE KEY UPDATE
                 token_hash = VALUES(token_hash),
+                token = VALUES(token),
                 visibility = VALUES(visibility),
                 permission = VALUES(permission),
                 expires_at = VALUES(expires_at),
                 revoked_at = VALUES(revoked_at),
                 created_by_id = VALUES(created_by_id),
                 created_by_name = VALUES(created_by_name),
-                created_at = VALUES(created_at),
                 updated_at = VALUES(updated_at)
             """,
             values,
@@ -585,6 +578,17 @@ class MysqlArtifactRepository(ArtifactRepository):
             ).mappings().first()
         return dict(row) if row is not None else None
 
+    def get_share_by_version_id(self, artifact_version_id: str) -> Optional[Record]:
+        with self._engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    self._share_query()
+                    + " WHERE s.artifact_version_id = :artifact_version_id"
+                ),
+                {"artifact_version_id": artifact_version_id},
+            ).mappings().first()
+        return dict(row) if row is not None else None
+
     def list_shares_by_creator(self, created_by_id: str) -> List[Record]:
         with self._engine.connect() as connection:
             rows = connection.execute(
@@ -624,6 +628,7 @@ class MysqlArtifactRepository(ArtifactRepository):
                 s.share_id AS share_id,
                 s.artifact_version_id AS artifact_version_id,
                 s.token_hash AS token_hash,
+                s.token AS token,
                 s.visibility AS visibility,
                 s.permission AS permission,
                 s.expires_at AS expires_at,
@@ -639,6 +644,8 @@ class MysqlArtifactRepository(ArtifactRepository):
                 av.size_bytes AS size_bytes,
                 av.checksum AS checksum,
                 a.name AS name,
+                a.source_session_id AS source_session_id,
+                a.source_path AS source_path,
                 a.created_by_id AS artifact_created_by_id,
                 a.created_by_name AS artifact_created_by_name
             FROM dsh_shares s

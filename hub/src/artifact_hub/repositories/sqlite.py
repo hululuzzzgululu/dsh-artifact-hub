@@ -67,6 +67,7 @@ class SqliteArtifactRepository(ArtifactRepository):
             artifact_version_id TEXT NOT NULL
                 REFERENCES dsh_artifact_versions(artifact_version_id),
             token_hash TEXT NOT NULL UNIQUE,
+            token TEXT,
             visibility TEXT NOT NULL,
             permission TEXT NOT NULL,
             expires_at TEXT,
@@ -136,6 +137,7 @@ class SqliteArtifactRepository(ArtifactRepository):
                 self._migrate_business_ids(cursor)
                 self._migrate_creator_and_workspace_metadata(cursor)
                 self._create_tables(cursor)
+                self._migrate_share_token(cursor)
                 self._migrate_share_uniqueness(cursor)
                 self._connection.commit()
             except Exception:
@@ -268,6 +270,17 @@ class SqliteArtifactRepository(ArtifactRepository):
                 cursor.execute(
                     "ALTER TABLE dsh_artifacts ADD COLUMN {} TEXT".format(column_name)
                 )
+
+    @staticmethod
+    def _migrate_share_token(cursor) -> None:
+        """Store the raw share token for idempotent re-share of one version."""
+
+        columns = {
+            row[1]
+            for row in cursor.execute('PRAGMA table_info("dsh_shares")').fetchall()
+        }
+        if "token" not in columns:
+            cursor.execute("ALTER TABLE dsh_shares ADD COLUMN token TEXT")
 
     @staticmethod
     def _migrate_share_uniqueness(cursor) -> None:
@@ -507,21 +520,21 @@ class SqliteArtifactRepository(ArtifactRepository):
             cursor.execute(
                 """
                 INSERT INTO dsh_shares
-                (share_id, artifact_version_id, token_hash, visibility, permission,
+                (share_id, artifact_version_id, token_hash, token, visibility, permission,
                  expires_at, revoked_at, created_by_id, created_by_name,
                  created_at, updated_at)
-                VALUES (:share_id, :artifact_version_id, :token_hash, :visibility,
+                VALUES (:share_id, :artifact_version_id, :token_hash, :token, :visibility,
                         :permission, :expires_at, :revoked_at, :created_by_id,
                         :created_by_name, :created_at, :updated_at)
                 ON CONFLICT(artifact_version_id) DO UPDATE SET
                     token_hash = excluded.token_hash,
+                    token = excluded.token,
                     visibility = excluded.visibility,
                     permission = excluded.permission,
                     expires_at = excluded.expires_at,
                     revoked_at = excluded.revoked_at,
                     created_by_id = excluded.created_by_id,
                     created_by_name = excluded.created_by_name,
-                    created_at = excluded.created_at,
                     updated_at = excluded.updated_at
                 """,
                 values,
@@ -578,6 +591,14 @@ class SqliteArtifactRepository(ArtifactRepository):
             ).fetchone()
         return self._row_to_dict(row)
 
+    def get_share_by_version_id(self, artifact_version_id: str) -> Optional[Record]:
+        with self._lock:
+            row = self._connection.execute(
+                self._share_query() + " WHERE s.artifact_version_id = ?",
+                (artifact_version_id,),
+            ).fetchone()
+        return self._row_to_dict(row)
+
     def list_shares_by_creator(self, created_by_id: str) -> List[Record]:
         with self._lock:
             rows = self._connection.execute(
@@ -607,6 +628,7 @@ class SqliteArtifactRepository(ArtifactRepository):
                 s.share_id AS share_id,
                 s.artifact_version_id AS artifact_version_id,
                 s.token_hash AS token_hash,
+                s.token AS token,
                 s.visibility AS visibility,
                 s.permission AS permission,
                 s.expires_at AS expires_at,
@@ -622,6 +644,8 @@ class SqliteArtifactRepository(ArtifactRepository):
                 av.size_bytes AS size_bytes,
                 av.checksum AS checksum,
                 a.name AS name,
+                a.source_session_id AS source_session_id,
+                a.source_path AS source_path,
                 a.created_by_id AS artifact_created_by_id,
                 a.created_by_name AS artifact_created_by_name
             FROM dsh_shares s

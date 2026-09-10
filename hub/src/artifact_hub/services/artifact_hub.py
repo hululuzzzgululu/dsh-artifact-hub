@@ -100,7 +100,9 @@ class ArtifactHub:
             artifact_type=artifact_type,
         )
         final_name = artifact["name"]
-        storage_key = self.storage.storage_key(artifact["artifact_id"], version, final_name)
+        storage_key = self.storage.storage_key(
+            created_by_id, artifact["artifact_id"], version, final_name
+        )
         self.storage.copy_snapshot(source, storage_key)
         try:
             size, checksum = self.storage.inspect(storage_key)
@@ -173,7 +175,9 @@ class ArtifactHub:
         )
         if artifact_is_new:
             self.repository.create_artifact(self._artifact_values(artifact))
-        storage_key = self.storage.storage_key(artifact["artifact_id"], version, artifact["name"])
+        storage_key = self.storage.storage_key(
+            created_by_id, artifact["artifact_id"], version, artifact["name"]
+        )
         upload_id = self._id("upl")
         self.repository.create_upload(
             {
@@ -467,19 +471,26 @@ class ArtifactHub:
         created_at,
     ):
         self._validate_expiry(expires_at)
-        token = secrets.token_urlsafe(32)
+        existing = self.repository.get_share_by_version_id(version_id)
+        if existing is not None and existing["revoked_at"] is None and existing["token"]:
+            # Idempotent re-share of one version: keep the link alive.
+            token = existing["token"]
+        else:
+            # New version, revoked share, or pre-token legacy row: fresh link.
+            token = secrets.token_urlsafe(32)
         self.repository.upsert_share(
             {
-                "share_id": self._id("shr"),
+                "share_id": existing["share_id"] if existing is not None else self._id("shr"),
                 "artifact_version_id": version_id,
                 "token_hash": self._token_hash(token),
+                "token": token,
                 "visibility": visibility,
                 "permission": permission,
                 "expires_at": expires_at,
                 "revoked_at": None,
                 "created_by_id": created_by_id,
                 "created_by_name": created_by_name,
-                "created_at": created_at,
+                "created_at": existing["share_created_at"] if existing is not None else created_at,
                 "updated_at": created_at,
             }
         )
@@ -539,6 +550,8 @@ class ArtifactHub:
             "artifact_version_id": row["artifact_version_id"],
             "version": row["version"],
             "name": row["name"],
+            "source_session_id": row["source_session_id"],
+            "source_path": row["source_path"],
             "mime_type": row["mime_type"],
             "storage_mode": row["storage_mode"],
             "storage_key": row["storage_key"],
@@ -552,6 +565,13 @@ class ArtifactHub:
             "revoked_at": row["revoked_at"],
             "created_at": row["share_created_at"],
             "url": self.base_url + "/s/" + token if token else None,
+            # The durable link for the creator: rebuilt from the stored raw
+            # token so an idempotent re-share can re-show the same URL.
+            "share_url": (
+                self.base_url + "/s/" + row["token"]
+                if row["token"] and row["revoked_at"] is None
+                else None
+            ),
         }
 
     @staticmethod
@@ -607,6 +627,9 @@ class ArtifactHub:
         created_by_id = created_by_id.strip()
         if len(created_by_id) > 128:
             raise ValidationError("created_by_id must not exceed 128 characters")
+        # The creator ID is part of every artifact's relative storage key. Keep
+        # it a single path component so it cannot escape the configured root.
+        FilesystemStorage._validate_component(created_by_id, "created_by_id")
         if not isinstance(created_by_name, str) or not created_by_name.strip():
             created_by_name = created_by_id
         else:

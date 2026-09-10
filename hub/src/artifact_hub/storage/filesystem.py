@@ -33,12 +33,13 @@ class FilesystemStorage:
             raise ValidationError("source_path escapes the workspace")
         return relative
 
-    def storage_key(self, artifact_id, version, name):
+    def storage_key(self, user_id, artifact_id, version, name):
+        self._validate_component(user_id, "created_by_id")
         self._validate_component(artifact_id, "artifact_id")
         self._validate_component(name, "name")
         if version < 1:
             raise ValidationError("version must be positive")
-        return "artifacts/{}/v{}/{}".format(artifact_id, version, name)
+        return "{}/artifacts/{}/v{}/{}".format(user_id, artifact_id, version, name)
 
     def target_path(self, storage_key):
         candidate = self.root / Path(storage_key)
@@ -100,7 +101,7 @@ class FilesystemStorage:
             not value
             or Path(value).name != value
             or value in (".", "..")
-            or any(character in value for character in ("\r", "\n"))
+            or any(character in value for character in ("/", "\\", "\r", "\n"))
         ):
             raise ValidationError("{} must be a single safe path component".format(label))
 

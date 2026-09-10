@@ -2,10 +2,13 @@ import {
   CREATED_SHARES_RPC_ENDPOINT,
   LOCAL_SHARE_RPC_CHANNEL,
   LOCAL_SHARE_RPC_ENDPOINT,
+  WORKSPACE_FILES_RPC_ENDPOINT,
   type CreatedShare,
   type LocalShareRequest,
   type LocalShareResult,
   type LocalShareRpcResult,
+  type WorkspaceFilesRequest,
+  type WorkspaceFilesResult,
 } from '../contracts.ts'
 
 /** Browser RPC subset exposed by DSH's client Connection service. */
@@ -23,6 +26,17 @@ export type LocalShareRequester = (
   request: LocalShareRequest,
   signal?: AbortSignal,
 ) => Promise<LocalShareResult>
+
+/** UI-bound creator's-share list function passed into the sharing components. */
+export type CreatedSharesRequester = (
+  signal?: AbortSignal,
+) => Promise<readonly CreatedShare[]>
+
+/** UI-bound trusted Host workspace directory reader. */
+export type WorkspaceFilesRequester = (
+  request: WorkspaceFilesRequest,
+  signal?: AbortSignal,
+) => Promise<WorkspaceFilesResult>
 
 /** List Shares created by the Host's trusted identity. */
 export async function requestCreatedShares(
@@ -60,6 +74,25 @@ export async function requestLocalShare(
   return value
 }
 
+/** List one relative workspace directory through the loopback Host RPC. */
+export async function requestWorkspaceFiles(
+  request: WorkspaceFilesRequest,
+  rpc: ClientConnectionRpc,
+  signal?: AbortSignal,
+): Promise<WorkspaceFilesResult> {
+  const result = await rpc.call(
+    LOCAL_SHARE_RPC_CHANNEL,
+    WORKSPACE_FILES_RPC_ENDPOINT,
+    request,
+    signal,
+  )
+  if (!result.ok) throw new Error(result.error.message)
+  if (!isWorkspaceFilesResult(result.value)) {
+    throw new Error('DSH Host returned an invalid workspace file list')
+  }
+  return result.value
+}
+
 function isShareResult(value: unknown): value is LocalShareResult {
   return isRecord(value)
     && typeof value.shareId === 'string'
@@ -80,6 +113,8 @@ function isCreatedShare(value: unknown): value is CreatedShare {
     && typeof value.version === 'number'
     && Number.isInteger(value.version)
     && typeof value.name === 'string'
+    && typeof value.sourceSessionId === 'string'
+    && typeof value.sourcePath === 'string'
     && typeof value.mimeType === 'string'
     && typeof value.size === 'number'
     && Number.isFinite(value.size)
@@ -89,6 +124,37 @@ function isCreatedShare(value: unknown): value is CreatedShare {
     && (value.expiresAt === null || typeof value.expiresAt === 'string')
     && (value.revokedAt === null || typeof value.revokedAt === 'string')
     && (value.previewUrl === null || typeof value.previewUrl === 'string')
+    && (value.shareUrl === null || typeof value.shareUrl === 'string')
+}
+
+function isWorkspaceFilesResult(value: unknown): value is WorkspaceFilesResult {
+  return isRecord(value)
+    && typeof value.directory === 'string'
+    && isSafeWorkspacePath(value.directory)
+    && typeof value.truncated === 'boolean'
+    && Array.isArray(value.entries)
+    && value.entries.every(isWorkspaceFileEntry)
+}
+
+function isWorkspaceFileEntry(value: unknown): boolean {
+  return isRecord(value)
+    && typeof value.name === 'string'
+    && typeof value.path === 'string'
+    && value.name !== ''
+    && value.path !== ''
+    && isSafeWorkspacePath(value.path)
+    && (value.kind === 'file' || value.kind === 'directory')
+    && (value.size === undefined || typeof value.size === 'number')
+    && (value.modifiedAt === undefined || typeof value.modifiedAt === 'string')
+}
+
+function isSafeWorkspacePath(value: string): boolean {
+  const normalized = value.replace(/\\/gu, '/')
+  return normalized !== ''
+    ? !normalized.startsWith('/')
+      && !/^[A-Za-z]:\//u.test(normalized)
+      && !normalized.split('/').includes('..')
+    : true
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {

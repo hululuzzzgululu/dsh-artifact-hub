@@ -66,6 +66,10 @@ class ArtifactRepository(ABC):
         """Return the joined Share view for a business Share ID or None."""
 
     @abstractmethod
+    def get_share_by_version_id(self, artifact_version_id: str) -> Optional[Record]:
+        """Return the joined Share view for an Artifact Version or None."""
+
+    @abstractmethod
     def list_shares_by_creator(self, created_by_id: str) -> List[Record]:
         """List shares created by one trusted caller identity."""
 

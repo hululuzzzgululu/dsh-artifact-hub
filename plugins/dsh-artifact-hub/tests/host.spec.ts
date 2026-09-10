@@ -1,8 +1,11 @@
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { ArtifactHubClient, type Fetch, inferArtifactType } from '../src/host/client.ts'
 import {
   handleCreatedSharesRequest,
   handleLocalShareRequest,
+  handleWorkspaceFilesRequest,
   registerLocalShareRoute,
 } from '../src/host/route.ts'
 
@@ -36,6 +39,8 @@ const HUB_IDENTITY = { createdById: 'user-1', createdByName: 'User One' }
 
 const HUB_LIST_ITEM = {
   ...HUB_RESULT,
+  source_session_id: 'sess-1',
+  source_path: 'reports/report.md',
   mime_type: 'text/markdown',
   storage_mode: 'LOCAL',
   storage_key: '/private/snapshot/path',
@@ -48,6 +53,7 @@ const HUB_LIST_ITEM = {
   created_at: '2026-09-07T10:00:00Z',
   revoked_at: null,
   url: 'https://share.example/s/preview.ticket',
+  share_url: 'https://share.example/s/token',
 }
 
 describe('registerLocalShareRoute', () => {
@@ -136,6 +142,66 @@ describe('ArtifactHubClient', () => {
     expect(result).not.toHaveProperty('token')
   })
 
+  it('maps the two-phase NAS prepare and commit requests', async () => {
+    const fetcher = vi.fn<Fetch>()
+      .mockResolvedValueOnce(Response.json({
+        resultCode: '0',
+        resultMsg: 'success',
+        resultObj: {
+          upload_id: 'upl_1',
+          artifact_id: 'art_1',
+          version: 1,
+          storage_mode: 'NAS',
+          storage_key: 'user-1/artifacts/art_1/v1/report.md',
+          target_path: '/hub-only-mount/user-1/artifacts/art_1/v1/report.md',
+          name: 'report.md',
+        },
+      }, { status: 201 }))
+      .mockResolvedValueOnce(Response.json({
+        resultCode: '0', resultMsg: 'success', resultObj: HUB_RESULT,
+      }, { status: 201 }))
+    const client = new ArtifactHubClient('http://hub.internal', HUB_IDENTITY, fetcher)
+    const request = {
+      sessionId: 'sess-1',
+      workspaceRoot: '/workspaces/project-one',
+      dshWorkspaceId: 'workspace-1',
+      dshWorkspacePath: '/workspaces/project-one',
+      dshWorkspaceTitle: 'Project One',
+      sourcePath: 'reports/report.md',
+      expiresAt: '2026-12-31T16:00:00.000Z',
+    }
+
+    await expect(client.prepareNasShare(request)).resolves.toEqual({
+      uploadId: 'upl_1',
+      storageKey: 'user-1/artifacts/art_1/v1/report.md',
+    })
+    await expect(client.commitNasShare({
+      uploadId: 'upl_1', checksum: 'abc123', expiresAt: request.expiresAt,
+    })).resolves.toMatchObject({ shareId: 'shr_1' })
+
+    const [prepareUrl, prepareInit] = fetcher.mock.calls[0]!
+    expect(String(prepareUrl)).toBe('http://hub.internal/api/shares/prepare')
+    expect(JSON.parse(String(prepareInit?.body))).toEqual({
+      session_id: 'sess-1',
+      source_path: 'reports/report.md',
+      artifact_type: 'markdown',
+      created_by_id: 'user-1',
+      created_by_name: 'User One',
+      dsh_workspace_id: 'workspace-1',
+      dsh_workspace_path: '/workspaces/project-one',
+      dsh_workspace_title: 'Project One',
+    })
+    const [commitUrl, commitInit] = fetcher.mock.calls[1]!
+    expect(String(commitUrl)).toBe('http://hub.internal/api/shares/commit')
+    expect(JSON.parse(String(commitInit?.body))).toEqual({
+      upload_id: 'upl_1',
+      created_by_id: 'user-1',
+      created_by_name: 'User One',
+      checksum: 'abc123',
+      expires_at: '2026-12-31T16:00:00.000Z',
+    })
+  })
+
   it('lists the trusted creator shares and strips storage metadata', async () => {
     const fetcher = vi.fn<Fetch>(async () => Response.json({
       resultCode: '0', resultMsg: 'success', resultObj: { items: [HUB_LIST_ITEM] },
@@ -149,10 +215,12 @@ describe('ArtifactHubClient', () => {
     expect(init).toMatchObject({ method: 'GET' })
     expect(shares).toEqual([{
       shareId: 'shr_1', artifactId: 'art_1', artifactVersionId: 'av_1', version: 1,
-      name: 'report.md', mimeType: 'text/markdown', size: 42,
+      name: 'report.md', sourceSessionId: 'sess-1', sourcePath: 'reports/report.md',
+      mimeType: 'text/markdown', size: 42,
       visibility: 'LINK', permission: 'VIEW_DOWNLOAD',
       createdAt: '2026-09-07T10:00:00Z', expiresAt: null, revokedAt: null,
       previewUrl: 'https://share.example/s/preview.ticket',
+      shareUrl: 'https://share.example/s/token',
     }])
     expect(shares[0]).not.toHaveProperty('storageKey')
     expect(shares[0]).not.toHaveProperty('checksum')
@@ -186,6 +254,45 @@ describe('handleCreatedSharesRequest', () => {
       ok: true,
       value: [{ shareId: 'shr_1', artifactId: 'art_1' }],
     })
+  })
+})
+
+describe('handleWorkspaceFilesRequest', () => {
+  it('lists trusted workspace entries with produced-file-friendly relative paths', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR ?? '/tmp', 'artifact-hub-workspace-'))
+    try {
+      await mkdir(join(root, 'reports'), { recursive: true })
+      await writeFile(join(root, 'root.md'), 'hello')
+      await writeFile(join(root, 'reports', 'report.md'), 'report')
+      const sessions = { get: (sessionId: string) => sessionId === 'sess-1' ? { header: { cwd: root } } : undefined }
+
+      await expect(handleWorkspaceFilesRequest({ sessionId: 'sess-1' }, sessions)).resolves.toMatchObject({
+        ok: true,
+        value: {
+          directory: '',
+          entries: [
+            { name: 'reports', path: 'reports', kind: 'directory' },
+            { name: 'root.md', path: 'root.md', kind: 'file', size: 5 },
+          ],
+          truncated: false,
+        },
+      })
+      await expect(handleWorkspaceFilesRequest({ sessionId: 'sess-1', directory: 'reports' }, sessions))
+        .resolves.toMatchObject({ ok: true, value: { directory: 'reports', entries: [{ path: 'reports/report.md', kind: 'file' }] } })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it.each(['../outside', '/etc', 'C:\\outside'])('rejects unsafe directory %s', async directory => {
+    const sessions = { get: () => ({ header: { cwd: '/workspaces/project-one' } }) }
+    await expect(handleWorkspaceFilesRequest({ sessionId: 'sess-1', directory }, sessions))
+      .resolves.toMatchObject({ ok: false, error: { code: 'bad-request' } })
+  })
+
+  it('does not disclose a missing Session workspace', async () => {
+    await expect(handleWorkspaceFilesRequest({ sessionId: 'missing' }, HOST_SESSIONS))
+      .resolves.toMatchObject({ ok: false, error: { code: 'session-not-found' } })
   })
 })
 
