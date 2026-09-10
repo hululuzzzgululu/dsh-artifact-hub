@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { requestCreatedShares, requestLocalShare } from '../src/client/api.ts'
+import { requestCreatedShares, requestLocalShare, requestWorkspaceFiles } from '../src/client/api.ts'
 import {
   artifactHubWorkspaceStyles,
   filterArtifactGroups,
@@ -10,6 +10,7 @@ import type { CreatedShare } from '../src/contracts.ts'
 import { artifactFilesStyles, sessionRelativePath } from '../src/client/ArtifactFiles.tsx'
 import { matchCreatedShare, toDatetimeLocalValue } from '../src/client/shareLookup.ts'
 import { producedFiles } from '../src/client/deliverables.ts'
+import { producedPathsForMessage } from '../src/client/ArtifactShareAction.tsx'
 import { en, zh } from '../src/client/locales.ts'
 import { ArtifactHubWorkspaceController } from '../src/client/workspace-controller.ts'
 
@@ -80,6 +81,31 @@ describe('requestCreatedShares', () => {
         previewUrl: null,
       }],
     }) })).rejects.toThrow('invalid created-share list')
+  })
+})
+
+describe('requestWorkspaceFiles', () => {
+  it('calls the trusted Host workspace listing endpoint', async () => {
+    const listing = {
+      directory: 'reports',
+      entries: [{ name: 'report.md', path: 'reports/report.md', kind: 'file' as const, size: 42 }],
+      truncated: false,
+    }
+    const signal = new AbortController().signal
+    const call = vi.fn(async () => ({ ok: true as const, value: listing }))
+
+    await expect(requestWorkspaceFiles({ sessionId: 'sess-1', directory: 'reports' }, { call }, signal))
+      .resolves.toEqual(listing)
+    expect(call).toHaveBeenCalledWith('/artifact-hub', 'workspace-files', {
+      sessionId: 'sess-1', directory: 'reports',
+    }, signal)
+  })
+
+  it('rejects malformed Host listings before they reach the picker', async () => {
+    await expect(requestWorkspaceFiles({ sessionId: 'sess-1' }, { call: async () => ({
+      ok: true,
+      value: { directory: '', entries: [{ name: 'secret', path: '/etc/passwd', kind: 'file' }], truncated: false },
+    }) })).rejects.toThrow('invalid workspace file list')
   })
 })
 
@@ -228,6 +254,25 @@ describe('producedFiles', () => {
   })
 })
 
+describe('producedPathsForMessage', () => {
+  it('finds the finalized message turn and prioritizes settled files', () => {
+    const turn = { data: { get: () => ({ produced: [
+      { seq: 4, path: 'report.md' },
+      { seq: 3, path: 'data.csv' },
+      { seq: 5, path: 'late.md' },
+      { seq: 4, path: 'report.md' },
+    ] }) } }
+    const snapshot = {
+      nodes: { values: () => [{
+        data: { finalNode: { messageId: 'msg-1', seq: 4 } },
+        location: { kind: 'turn', turn },
+      }] },
+    }
+    expect(producedPathsForMessage(snapshot, 'msg-1')).toEqual(['report.md', 'data.csv'])
+    expect(producedPathsForMessage(snapshot, 'msg-missing')).toEqual([])
+  })
+})
+
 describe('sessionRelativePath', () => {
   it('keeps safe relative paths and removes dot segments', () => {
     expect(sessionRelativePath('./reports/report.md')).toBe('reports/report.md')
@@ -280,6 +325,8 @@ describe('ArtifactFiles theme', () => {
 
 describe('Share Center product copy', () => {
   it('uses file terminology instead of exposing Artifact terminology', () => {
+    expect(zh['picker.title']).toBe('选择分享的文件')
+    expect(zh['picker.produced']).toBe('本对话产出的文件')
     expect(zh['center.subtitle']).toBe('按文件汇总各版本当前的分享')
     expect(zh['center.results']).toBe('{files} 个文件 · {shares} 条分享')
     expect(en['center.subtitle']).toBe('Files are grouped with each version’s current share.')

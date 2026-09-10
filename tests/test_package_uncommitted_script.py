@@ -294,3 +294,97 @@ def test_packages_specific_commit_without_later_or_worktree_changes(
         assert "worktree.txt" not in names
         assert archive.read("base.txt").decode("utf-8") == "feature\n"
         assert archive.read("deleted_files.txt").decode("utf-8") == ""
+
+
+def test_packages_root_commit(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_repo(repo)
+    commit_file(repo, "first.txt", "first commit\n")
+
+    result = run_script_with_args(repo, "--commit", "HEAD")
+
+    assert result.returncode == 0, result.stderr
+    archive_path = next(repo.glob("commit-*.zip"))
+    with zipfile.ZipFile(archive_path) as archive:
+        assert archive.read("first.txt").decode("utf-8") == "first commit\n"
+        assert archive.read("deleted_files.txt").decode("utf-8") == ""
+
+
+def test_packages_last_commits_into_one_cumulative_archive(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_repo(repo)
+    (repo / "unchanged.txt").write_text("outside range\n", encoding="utf-8")
+    (repo / "changed.txt").write_text("before\n", encoding="utf-8")
+    (repo / "removed.txt").write_text("remove me\n", encoding="utf-8")
+    (repo / "old-name.txt").write_text("renamed content\n", encoding="utf-8")
+    commit_all(repo, "base commit")
+
+    (repo / "changed.txt").write_text("first change\n", encoding="utf-8")
+    (repo / "temporary.txt").write_text("temporary\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "mv", "old-name.txt", "new-name.txt"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    commit_all(repo, "first selected commit")
+    (repo / "temporary.txt").unlink()
+    (repo / "removed.txt").unlink()
+    (repo / "second.txt").write_text("second change\n", encoding="utf-8")
+    commit_all(repo, "second selected commit")
+    (repo / "changed.txt").write_text("final content\n", encoding="utf-8")
+    (repo / "third.txt").write_text("third change\n", encoding="utf-8")
+    commit_all(repo, "third selected commit")
+    (repo / "worktree.txt").write_text("uncommitted\n", encoding="utf-8")
+
+    result = run_script_with_args(repo, "--last", "3", "recent.zip")
+
+    assert result.returncode == 0, result.stderr
+    archive_path = repo / "recent.zip"
+    assert result.stdout.strip() == str(archive_path)
+    assert list(repo.glob("*.zip")) == [archive_path]
+
+    with zipfile.ZipFile(archive_path) as archive:
+        names = set(archive.namelist())
+        assert "changed.txt" in names
+        assert "new-name.txt" in names
+        assert "second.txt" in names
+        assert "third.txt" in names
+        assert "old-name.txt" not in names
+        assert "removed.txt" not in names
+        assert "temporary.txt" not in names
+        assert "unchanged.txt" not in names
+        assert "worktree.txt" not in names
+        assert archive.read("changed.txt").decode("utf-8") == "final content\n"
+        assert set(
+            archive.read("deleted_files.txt").decode("utf-8").splitlines()
+        ) == {"old-name.txt", "removed.txt"}
+
+
+def test_packages_last_commits_when_range_includes_root(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_repo(repo)
+    commit_file(repo, "first.txt", "first commit\n")
+
+    result = run_script_with_args(repo, "--last", "7", "all.zip")
+
+    assert result.returncode == 0, result.stderr
+    with zipfile.ZipFile(repo / "all.zip") as archive:
+        assert archive.read("first.txt").decode("utf-8") == "first commit\n"
+        assert archive.read("deleted_files.txt").decode("utf-8") == ""
+
+
+def test_rejects_invalid_last_commit_count(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_repo(repo)
+    commit_file(repo, "tracked.txt", "v1\n")
+
+    result = run_script_with_args(repo, "--last", "0")
+
+    assert result.returncode == 1
+    assert "Commit count must be a positive integer" in result.stderr

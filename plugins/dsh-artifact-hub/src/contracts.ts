@@ -2,6 +2,7 @@
 export const LOCAL_SHARE_RPC_CHANNEL = '/artifact-hub'
 export const LOCAL_SHARE_RPC_ENDPOINT = 'shares'
 export const CREATED_SHARES_RPC_ENDPOINT = 'created-shares'
+export const WORKSPACE_FILES_RPC_ENDPOINT = 'workspace-files'
 
 /** Browser-to-Host request for one Local snapshot. */
 export interface LocalShareRequest {
@@ -9,6 +10,28 @@ export interface LocalShareRequest {
   readonly sourcePath: string
   readonly expiresAt?: string
   readonly artifactId?: string
+}
+
+/** Browser request for one relative workspace directory listing. */
+export interface WorkspaceFilesRequest {
+  readonly sessionId: string
+  readonly directory?: string
+}
+
+/** One safe, relative entry returned by the trusted Host workspace browser. */
+export interface WorkspaceFileEntry {
+  readonly name: string
+  readonly path: string
+  readonly kind: 'file' | 'directory'
+  readonly size?: number
+  readonly modifiedAt?: string
+}
+
+/** Browser-safe workspace listing; the Host never returns its absolute root. */
+export interface WorkspaceFilesResult {
+  readonly directory: string
+  readonly entries: readonly WorkspaceFileEntry[]
+  readonly truncated: boolean
 }
 
 /** Browser-safe subset of the Hub creation result. */

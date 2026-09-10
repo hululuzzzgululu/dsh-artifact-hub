@@ -15,6 +15,7 @@ export {
   handleCreatedSharesRequest,
   handleShareRequest,
   handleLocalShareRequest,
+  handleWorkspaceFilesRequest,
   registerShareRoute,
   registerLocalShareRoute,
 } from './route.ts'

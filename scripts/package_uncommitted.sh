@@ -7,10 +7,12 @@ invocation_dir="$(pwd)"
 usage() {
   echo "Usage: $0 [output_zip_path]" >&2
   echo "       $0 --commit <commit> [output_zip_path]" >&2
+  echo "       $0 --last <count> [output_zip_path]" >&2
 }
 
 mode="uncommitted"
 commit_ref=""
+last_count=""
 output_zip_path=""
 
 if [[ $# -gt 0 && "$1" == "--commit" ]]; then
@@ -20,6 +22,20 @@ if [[ $# -gt 0 && "$1" == "--commit" ]]; then
     exit 1
   fi
   commit_ref="$2"
+  if [[ $# -eq 3 ]]; then
+    output_zip_path="$3"
+  fi
+elif [[ $# -gt 0 && "$1" == "--last" ]]; then
+  mode="last"
+  if [[ $# -lt 2 || $# -gt 3 ]]; then
+    usage
+    exit 1
+  fi
+  last_count="$2"
+  if [[ ! "$last_count" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Commit count must be a positive integer: $last_count" >&2
+    exit 1
+  fi
   if [[ $# -eq 3 ]]; then
     output_zip_path="$3"
   fi
@@ -103,6 +119,11 @@ if [[ "$mode" == "uncommitted" ]]; then
 
     if [[ "$x" == "R" || "$x" == "C" || "$y" == "R" || "$y" == "C" ]]; then
       IFS= read -r -d '' _original_path || true
+      if [[ "$x" == "R" || "$y" == "R" ]]; then
+        if ! has_path "$_original_path" "${deleted_files[@]-}"; then
+          deleted_files+=("$_original_path")
+        fi
+      fi
     fi
 
     if [[ "$x" == "D" || "$y" == "D" ]]; then
@@ -138,20 +159,34 @@ if [[ "$mode" == "uncommitted" ]]; then
 
   timestamp="$(date +%Y%m%d-%H%M%S)"
   archive_path="$repo_root/uncommitted-$timestamp.zip"
-else
+elif [[ "$mode" == "commit" ]]; then
   commit_id="$(git rev-parse --verify "${commit_ref}^{commit}" 2>/dev/null)" || {
     echo "Commit not found: $commit_ref" >&2
     exit 1
   }
-  parent_id="$(git rev-parse --verify "${commit_id}^" 2>/dev/null)" || {
-    echo "Commit has no parent: $commit_ref" >&2
+  if ! parent_id="$(git rev-parse --verify "${commit_id}^" 2>/dev/null)"; then
+    parent_id="$(git hash-object -t tree /dev/null)"
+  fi
+
+  change_description="commit: $commit_ref"
+else
+  commit_id="$(git rev-parse --verify "HEAD^{commit}" 2>/dev/null)" || {
+    echo "No commits found" >&2
     exit 1
   }
+  oldest_commit="$(git rev-list --max-count="$last_count" HEAD | tail -n 1)"
+  if ! parent_id="$(git rev-parse --verify "${oldest_commit}^" 2>/dev/null)"; then
+    parent_id="$(git hash-object -t tree /dev/null)"
+  fi
 
+  change_description="last $last_count commits"
+fi
+
+if [[ "$mode" != "uncommitted" ]]; then
   git diff --name-status -z "$parent_id" "$commit_id" >"$status_file"
 
   if [[ ! -s "$status_file" ]]; then
-    echo "No changed files found for commit: $commit_ref" >&2
+    echo "No changed files found for $change_description" >&2
     exit 1
   fi
 
@@ -159,6 +194,11 @@ else
     if [[ "$status" == R* || "$status" == C* ]]; then
       IFS= read -r -d '' _original_path || true
       IFS= read -r -d '' path || true
+      if [[ "$status" == R* ]]; then
+        if ! has_path "$_original_path" "${deleted_files[@]-}"; then
+          deleted_files+=("$_original_path")
+        fi
+      fi
     else
       IFS= read -r -d '' path || true
     fi
@@ -177,7 +217,11 @@ else
 
   short_commit="$(git rev-parse --short "$commit_id")"
   timestamp="$(date +%Y%m%d-%H%M%S)"
-  archive_path="$repo_root/commit-$short_commit-$timestamp.zip"
+  if [[ "$mode" == "last" ]]; then
+    archive_path="$repo_root/last-${last_count}-commits-$short_commit-$timestamp.zip"
+  else
+    archive_path="$repo_root/commit-$short_commit-$timestamp.zip"
+  fi
 fi
 
 : >"$deleted_manifest"
@@ -195,7 +239,7 @@ fi
 
 mkdir -p "$(dirname "$archive_path")"
 
-if [[ "$mode" == "commit" && ${#existing_files[@]} -gt 0 ]]; then
+if [[ "$mode" != "uncommitted" && ${#existing_files[@]} -gt 0 ]]; then
   git archive --format=zip --output="$archive_path" "$commit_id" -- "${existing_files[@]}"
 elif [[ ${#zip_existing_files[@]} -gt 0 ]]; then
   first_path="${zip_existing_files[0]}"

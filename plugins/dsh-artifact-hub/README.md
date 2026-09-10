@@ -1,13 +1,13 @@
 # dsh-artifact-hub plugin
 
-DeepSeek Harness 的 Artifact Hub 插件。当前版本支持 `LOCAL` 和 `NAS`：在一轮对话产生的文件旁显示“分享”，并在左侧“新会话”下提供“分享中心”入口。DSH Host 从可信的 session 与 workspace 服务解析源文件和创建者元数据；Local 模式由 Hub 复制快照，NAS 模式由 DSH Host 直接复制到共享挂载后让 Hub 校验并提交。
+DeepSeek Harness 的 Artifact Hub 插件。当前版本支持 `LOCAL` 和 `NAS`：每条已完成的 AI 回复底部都有“分享文件”入口，弹窗会优先展示本条回复产出的文件，也可以浏览并选择整个 Session workspace 内的文件；产出文件旁仍保留快捷分享按钮，并在左侧“新会话”下提供“分享中心”入口。DSH Host 从可信的 session 与 workspace 服务解析源文件和创建者元数据；Local 模式由 Hub 复制快照，NAS 模式由 DSH Host 直接复制到共享挂载后让 Hub 校验并提交。
 
 ## 前置条件
 
 - Local 模式下，DSH Host 与 Artifact Hub 必须能以相同绝对路径访问 session 的 `header.cwd` workspace。
 - NAS 模式下，DSH Host 必须能读取 session workspace，且 DSH Host 与 Hub 都要挂载同一 NAS；两边的挂载路径可以不同，但权限必须允许 DSH 创建文件、Hub 读取文件。
 - Artifact Hub 已启动，默认地址为 `http://127.0.0.1:8000`。
-- DSH 版本支持 bundle、`dsh.client` Web 插件、`conversation.chat.turnTail` 插槽和 Host `workspaceRegistry` 服务（当前开发预览版）。
+- DSH 版本支持 bundle、`dsh.client` Web 插件、`conversation.chat.turnTail` / `conversation.chat.assistant-actions` 插槽和 Host `workspaceRegistry` 服务（当前开发预览版）。
 
 ## 安装
 
@@ -48,8 +48,8 @@ dsh web
 
 ## Local 数据流
 
-1. DSH Client 从本轮成功写入的文件列表取得 `sessionId` 和相对 `sourcePath`。
-2. 浏览器通过 DSH Connection RPC 调用 `/artifact-hub` channel 的 `shares` endpoint；浏览器不能指定 workspace 或创建者元数据。
+1. DSH Client 从当前回复对应 Turn 的 deliverables 数据取得产出文件，并从 Session 标准状态取得可信 `sessionId` / `cwd`。
+2. 浏览器通过 DSH Connection RPC 调用 `/artifact-hub` channel 的 `workspace-files` endpoint 浏览当前目录；浏览器不能指定 workspace 根目录或创建者元数据。分享动作最终调用 `shares` endpoint。
 3. DSH Host 使用 `ctx.sessions.get(sessionId).header.cwd` 解析可信文件根目录，并在 `ctx.workspaceRegistry.list()` 中按 Session 成员关系取得 Workspace 的 `id/path/title`；未注册的旧 Session 只回退路径。Host 再按 `source_path` 扩展名推断 `artifact_type`（html/markdown/text/code/data/image/pdf/archive/other），加入受信任身份字段后调用 Hub 的 `POST /api/shares`。
 4. Hub 从 `<workspace_root>/<source_path>` 读取文件；同一来源会复用 Artifact，checksum 未变化时也会复用 Artifact Version，并对该版本唯一的 Share 做幂等更新：复用原 token，仅更新有效期，旧链接保持有效（原 Share 已撤销时才换新 token）。插件只把分享 URL 返回浏览器，不返回原始 token 字段。
 

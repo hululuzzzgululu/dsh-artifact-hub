@@ -2,13 +2,17 @@ import {
   CREATED_SHARES_RPC_ENDPOINT,
   LOCAL_SHARE_RPC_CHANNEL,
   LOCAL_SHARE_RPC_ENDPOINT,
+  WORKSPACE_FILES_RPC_ENDPOINT,
   type CreatedShare,
   type LocalShareRequest,
   type LocalShareResult,
   type LocalShareRpcResult,
+  type WorkspaceFilesRequest,
+  type WorkspaceFilesResult,
 } from '../contracts.ts'
 import { ArtifactHubClient, ArtifactHubRequestError } from './client.ts'
 import { createNasShare } from './nas.ts'
+import { listWorkspaceFiles, normalizeRelativePath } from './workspace-files.ts'
 
 /** Artifact byte path selected by the trusted Host configuration. */
 export type ShareStorage = {
@@ -67,6 +71,9 @@ export function registerShareRoute(
       if (endpoint === CREATED_SHARES_RPC_ENDPOINT) {
         return handleCreatedSharesRequest(client, signal)
       }
+      if (endpoint === WORKSPACE_FILES_RPC_ENDPOINT) {
+        return handleWorkspaceFilesRequest(payload, sessions, signal)
+      }
       return Promise.resolve(failure('bad-request', `Unknown Artifact Hub endpoint: ${endpoint}`))
     },
     { authority: 'loopback' },
@@ -95,6 +102,36 @@ export async function handleCreatedSharesRequest(
       return failure(error.status >= 400 && error.status < 500 ? 'bad-request' : 'internal', error.message)
     }
     return failure('internal', messageOf(error))
+  }
+}
+
+/** List trusted files for the in-conversation workspace picker. */
+export async function handleWorkspaceFilesRequest(
+  payload: unknown,
+  sessions: HostSessionStore,
+  signal?: AbortSignal,
+): Promise<LocalShareRpcResult<WorkspaceFilesResult>> {
+  try {
+    const input = parseWorkspaceFilesRequest(payload)
+    const workspaceRoot = sessions.get(input.sessionId)?.header.cwd
+    if (workspaceRoot === undefined || workspaceRoot === '') {
+      throw new LocalShareRouteError(
+        'session-not-found',
+        'Session workspace is unavailable',
+        { sessionId: input.sessionId },
+      )
+    }
+    return {
+      ok: true,
+      value: await listWorkspaceFiles(workspaceRoot, input.directory, signal),
+    }
+  } catch (error: unknown) {
+    if (error instanceof LocalShareRouteError) {
+      return failure(error.code, error.message, error.details)
+    }
+    // Do not echo filesystem errors: Node includes the absolute workspace path
+    // in several messages, while the browser only needs a retryable status.
+    return failure('bad-request', 'Workspace directory is unavailable')
   }
 }
 
@@ -189,6 +226,21 @@ function parseRequest(value: unknown): LocalShareRequest {
     sourcePath,
     ...(expiresAt === undefined ? {} : { expiresAt }),
     ...(artifactId === undefined ? {} : { artifactId }),
+  }
+}
+
+function parseWorkspaceFilesRequest(value: unknown): WorkspaceFilesRequest {
+  if (!isRecord(value)) throw new Error('Request body must be an object')
+  const sessionId = nonBlank(value.sessionId, 'sessionId')
+  if (value.directory !== undefined && typeof value.directory !== 'string') {
+    throw new Error('directory must be a string')
+  }
+  const directory = value.directory === undefined
+    ? undefined
+    : normalizeRelativePath(value.directory, 'directory')
+  return {
+    sessionId,
+    ...(directory === undefined ? {} : { directory }),
   }
 }
 

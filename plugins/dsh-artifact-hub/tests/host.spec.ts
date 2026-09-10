@@ -1,8 +1,11 @@
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { ArtifactHubClient, type Fetch, inferArtifactType } from '../src/host/client.ts'
 import {
   handleCreatedSharesRequest,
   handleLocalShareRequest,
+  handleWorkspaceFilesRequest,
   registerLocalShareRoute,
 } from '../src/host/route.ts'
 
@@ -251,6 +254,45 @@ describe('handleCreatedSharesRequest', () => {
       ok: true,
       value: [{ shareId: 'shr_1', artifactId: 'art_1' }],
     })
+  })
+})
+
+describe('handleWorkspaceFilesRequest', () => {
+  it('lists trusted workspace entries with produced-file-friendly relative paths', async () => {
+    const root = await mkdtemp(join(process.env.TMPDIR ?? '/tmp', 'artifact-hub-workspace-'))
+    try {
+      await mkdir(join(root, 'reports'), { recursive: true })
+      await writeFile(join(root, 'root.md'), 'hello')
+      await writeFile(join(root, 'reports', 'report.md'), 'report')
+      const sessions = { get: (sessionId: string) => sessionId === 'sess-1' ? { header: { cwd: root } } : undefined }
+
+      await expect(handleWorkspaceFilesRequest({ sessionId: 'sess-1' }, sessions)).resolves.toMatchObject({
+        ok: true,
+        value: {
+          directory: '',
+          entries: [
+            { name: 'reports', path: 'reports', kind: 'directory' },
+            { name: 'root.md', path: 'root.md', kind: 'file', size: 5 },
+          ],
+          truncated: false,
+        },
+      })
+      await expect(handleWorkspaceFilesRequest({ sessionId: 'sess-1', directory: 'reports' }, sessions))
+        .resolves.toMatchObject({ ok: true, value: { directory: 'reports', entries: [{ path: 'reports/report.md', kind: 'file' }] } })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it.each(['../outside', '/etc', 'C:\\outside'])('rejects unsafe directory %s', async directory => {
+    const sessions = { get: () => ({ header: { cwd: '/workspaces/project-one' } }) }
+    await expect(handleWorkspaceFilesRequest({ sessionId: 'sess-1', directory }, sessions))
+      .resolves.toMatchObject({ ok: false, error: { code: 'bad-request' } })
+  })
+
+  it('does not disclose a missing Session workspace', async () => {
+    await expect(handleWorkspaceFilesRequest({ sessionId: 'missing' }, HOST_SESSIONS))
+      .resolves.toMatchObject({ ok: false, error: { code: 'session-not-found' } })
   })
 })
 
